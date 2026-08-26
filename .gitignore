@@ -7,3 +7,7 @@ rules.json
 __pycache__/
 *.pyc
 .venv/
+
+# 로그인 세션 - 절대 커밋 금지
+녹화/프로필/
+녹화/녹화결과.py
