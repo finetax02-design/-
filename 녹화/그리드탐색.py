@@ -1,15 +1,14 @@
-"""페이지 안의 RealGrid 객체를 찾아 다룰 수 있는지 확인한다.
+"""페이지 안의 RealGrid 객체를 찾아 다룰 수 있는지 확인한다 (v2).
 
-위하고 전표 목록은 RealGrid 로 그려진다. RealGrid 는 canvas 에 직접
-그리므로 HTML 을 뒤져도 행이 나오지 않는다. 대신 자바스크립트 API 가 있어서
-그 객체만 잡으면 데이터를 읽고 쓸 수 있다.
+v1 은 탐색 결과를 객체로 돌려주다가 변환에 실패했다. RealGrid 의 컬럼
+정보에는 그대로 넘길 수 없는 값이 섞여 있다. 그래서 v2 는 브라우저 쪽에서
+결과를 전부 글자로 만들어 한 덩어리로 넘긴다. 어떤 값이 들어와도 깨지지 않는다.
 
-이 스크립트는 그 객체를 어디서 찾을 수 있는지, 컬럼과 행이 몇 개인지,
-값을 읽어올 수 있는지까지 확인한다.
+탐색 범위도 넓혔다. RealGrid 객체가 전역에 없으면 Vue/React 내부와
+그리드 요소에 붙은 참조까지 뒤진다.
 
 거래처명과 금액은 마스킹한다.
 """
-import json
 import traceback
 from pathlib import Path
 
@@ -26,88 +25,149 @@ def say(text: str = "") -> None:
     lines.append(text)
 
 
+# 브라우저 안에서 실행되며, 결과를 글자 하나로 만들어 돌려준다.
 PROBE = r"""() => {
-  const out = { globals: [], namespace: {}, elementKeys: {}, grids: [] };
+  const L = [];
+  const log = s => L.push(String(s));
   const mask = v => {
-    if (v === null || v === undefined) return null;
-    const s = String(v);
-    return s.replace(/\d/g, '#').slice(0, 10);
+    if (v === null || v === undefined) return '(빈값)';
+    try { return String(v).replace(/\d/g, '#').slice(0, 12); } catch (e) { return '(변환실패)'; }
+  };
+  const safe = (label, fn) => {
+    try { return fn(); } catch (e) { log(`  [${label}] 오류: ${String(e).slice(0, 150)}`); return null; }
   };
 
-  // 1) RealGrid 전역 이름이 있는지
-  for (const n of ['RealGrid', 'RealGridJS', 'realgrid', 'RealGrid2']) {
-    try { out.namespace[n] = typeof window[n]; } catch (e) { out.namespace[n] = 'err'; }
-  }
+  const GRID_METHODS = ['getDataSource','setDataSource','getItemCount','getColumns',
+                        'getJsonRows','getRowCount','setValue','getValues','getValue',
+                        'setEditable','commit','refresh'];
+  const gridish = o => {
+    if (!o || (typeof o !== 'object' && typeof o !== 'function')) return false;
+    let hits = 0;
+    for (const m of GRID_METHODS) { try { if (typeof o[m] === 'function') hits++; } catch (e) {} }
+    return hits >= 2;
+  };
 
-  // 2) window 안에서 그리드처럼 생긴 객체 찾기
-  const gridish = o => o && typeof o === 'object' &&
-    (typeof o.getDataSource === 'function' || typeof o.setDataSource === 'function' ||
-     typeof o.getItemCount === 'function' || typeof o.getColumns === 'function' ||
-     typeof o.getJsonRows === 'function' || typeof o.getRowCount === 'function');
-
-  let keys = [];
-  try { keys = Object.keys(window); } catch (e) {}
-  for (const k of keys) {
-    let v;
-    try { v = window[k]; } catch (e) { continue; }
-    if (gridish(v)) {
-      out.globals.push({ where: 'window.' + k,
-        methods: ['getDataSource','getItemCount','getColumns','getJsonRows','getRowCount','setValue','getValues']
-          .filter(m => typeof v[m] === 'function') });
-    }
-  }
-
-  // 3) 그리드 컨테이너 요소에 붙어 있는 내부 참조 (Vue / React 등)
-  for (const id of ['GRID_TOP', 'GRID_DOWN']) {
-    const el = document.getElementById(id);
-    if (!el) { out.elementKeys[id] = '요소 없음'; continue; }
-    out.elementKeys[id] = Object.keys(el).filter(k => k.startsWith('_') || k.startsWith('$')).slice(0, 20);
-  }
-
-  // 4) 찾은 그리드에서 실제로 컬럼과 값을 꺼내본다
-  const probe = (label, g) => {
-    const info = { label, ok: false };
-    try {
-      let cols = [];
-      if (typeof g.getColumns === 'function') {
-        cols = g.getColumns().map(c => ({ name: c.name || c.fieldName || '',
-                                          header: (c.header && (c.header.text || c.header)) || '' }));
+  log('===== 1. RealGrid 전역 이름 =====');
+  for (const n of ['RealGrid','RealGridJS','realgrid','RealGrid2','GridView']) {
+    safe(n, () => {
+      const t = typeof window[n];
+      log(`  window.${n} : ${t}`);
+      if (t === 'object' || t === 'function') {
+        const ks = Object.keys(window[n]).slice(0, 25);
+        log(`      속성: ${ks.join(', ')}`);
       }
-      info.columns = cols.slice(0, 30);
+    });
+  }
 
-      let dp = null;
-      try { dp = typeof g.getDataSource === 'function' ? g.getDataSource() : null; } catch (e) {}
-      const src = dp || g;
-      if (typeof src.getRowCount === 'function') info.rowCount = src.getRowCount();
-      else if (typeof src.getItemCount === 'function') info.rowCount = src.getItemCount();
+  log('');
+  log('===== 2. window 안의 그리드 같은 객체 =====');
+  const found = [];
+  let keys = [];
+  safe('window키', () => { keys = Object.keys(window); });
+  log(`  window 속성 ${keys.length}개 검사`);
+  for (const k of keys) {
+    safe('scan:' + k, () => {
+      const v = window[k];
+      if (gridish(v)) {
+        found.push({ path: 'window.' + k, obj: v });
+        const ms = GRID_METHODS.filter(m => { try { return typeof v[m] === 'function'; } catch (e) { return false; } });
+        log(`  window.${k}  →  ${ms.join(', ')}`);
+      }
+    });
+  }
+  if (!found.length) log('  없음');
 
-      if (typeof src.getValues === 'function' && info.rowCount > 0) {
-        info.sampleRow = src.getValues(0).map(mask);
-      } else if (typeof src.getJsonRows === 'function') {
-        const rows = src.getJsonRows(0, 0);
-        if (rows && rows[0]) {
-          info.sampleRow = {};
-          for (const k of Object.keys(rows[0])) info.sampleRow[k] = mask(rows[0][k]);
+  log('');
+  log('===== 3. 그리드 요소에 붙은 내부 참조 =====');
+  for (const id of ['GRID_TOP','GRID_DOWN']) {
+    safe('el:' + id, () => {
+      const el = document.getElementById(id);
+      if (!el) { log(`  ${id}: 요소 없음`); return; }
+      const ks = Object.keys(el).filter(k => k.startsWith('_') || k.startsWith('$'));
+      log(`  ${id}: ${ks.length ? ks.slice(0, 20).join(', ') : '(내부 참조 없음)'}`);
+      for (const k of ks) {
+        safe('elref', () => {
+          const v = el[k];
+          if (gridish(v)) { found.push({ path: `#${id}.${k}`, obj: v }); log(`      → ${k} 가 그리드!`); }
+          // Vue 컴포넌트면 그 안의 속성도 한 겹 본다
+          if (v && typeof v === 'object') {
+            for (const inner of ['ctx','proxy','setupState','data','$data','$refs']) {
+              const iv = v[inner];
+              if (iv && typeof iv === 'object') {
+                for (const ik of Object.keys(iv).slice(0, 60)) {
+                  if (gridish(iv[ik])) {
+                    found.push({ path: `#${id}.${k}.${inner}.${ik}`, obj: iv[ik] });
+                    log(`      → ${k}.${inner}.${ik} 가 그리드!`);
+                  }
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+  }
+
+  log('');
+  log('===== 4. 찾은 객체에서 실제로 꺼내보기 =====');
+  if (!found.length) log('  꺼내볼 객체가 없습니다.');
+  for (const f of found) {
+    log(`\n  --- ${f.path} ---`);
+    const g = f.obj;
+    safe('columns', () => {
+      if (typeof g.getColumns !== 'function') { log('    getColumns 없음'); return; }
+      const cols = g.getColumns();
+      log(`    컬럼 ${cols.length}개`);
+      cols.slice(0, 40).forEach((c, i) => {
+        let name = '', head = '';
+        try { name = String(c.name || c.fieldName || ''); } catch (e) {}
+        try {
+          const h = c.header;
+          head = h == null ? '' : (typeof h === 'object' ? String(h.text || '') : String(h));
+        } catch (e) {}
+        log(`      ${i}: name=${name}  header=${head}`);
+      });
+    });
+    let src = g;
+    safe('datasource', () => {
+      if (typeof g.getDataSource === 'function') {
+        const dp = g.getDataSource();
+        if (dp) { src = dp; log('    getDataSource() 있음'); }
+      }
+    });
+    safe('rowcount', () => {
+      for (const m of ['getRowCount','getItemCount']) {
+        if (typeof src[m] === 'function') { log(`    ${m}() = ${src[m]()}`); }
+      }
+    });
+    safe('sample', () => {
+      if (typeof src.getJsonRows === 'function') {
+        const rows = src.getJsonRows(0, 1);
+        if (rows && rows.length) {
+          log('    샘플행(마스킹):');
+          for (const k of Object.keys(rows[0])) log(`      ${k} = ${mask(rows[0][k])}`);
+          return;
         }
       }
-      info.writable = typeof src.setValue === 'function' || typeof g.setValue === 'function';
-      info.ok = true;
-    } catch (e) {
-      info.error = String(e).slice(0, 200);
-    }
-    return info;
-  };
-
-  for (const g of out.globals) {
-    try { out.grids.push(probe(g.where, window[g.where.replace('window.', '')])); } catch (e) {}
+      if (typeof src.getValues === 'function') {
+        const vals = src.getValues(0);
+        log('    샘플행(마스킹): ' + (vals || []).map(mask).join(' | '));
+      }
+    });
+    safe('writable', () => {
+      const w = ['setValue','setValues','updateRow','setEditable']
+        .filter(m => typeof src[m] === 'function' || typeof g[m] === 'function');
+      log(`    쓰기 메서드: ${w.length ? w.join(', ') : '없음'}`);
+    });
   }
-  return out;
+
+  return L.join('\n');
 }"""
 
 
 print()
 print("=" * 62)
-print("  RealGrid 객체 탐색")
+print("  RealGrid 객체 탐색 (v2)")
 print("=" * 62)
 print()
 print("  크롬열기.bat 으로 띄운 크롬에서")
@@ -124,35 +184,8 @@ try:
             say("smarta.wehago.com 탭을 찾지 못했습니다.")
             say("열린 탭: " + ", ".join(pg.url[:80] for pg in pages))
         else:
-            say(f"대상 탭: {target.url[:120]}\n")
-            data = target.evaluate(PROBE)
-
-            say("=" * 60)
-            say("[RealGrid 전역 이름]")
-            say(json.dumps(data["namespace"], ensure_ascii=False))
-
-            say("\n[window 안의 그리드 같은 객체]")
-            if data["globals"]:
-                for g in data["globals"]:
-                    say(f"  {g['where']}  메서드: {g['methods']}")
-            else:
-                say("  없음 — 전역에 노출되지 않았습니다.")
-
-            say("\n[그리드 요소에 붙은 내부 참조]")
-            for k, v in data["elementKeys"].items():
-                say(f"  {k}: {v}")
-
-            say("\n[꺼내본 결과]")
-            for g in data["grids"]:
-                say(f"\n  --- {g['label']} ---")
-                say(f"  성공 여부: {g['ok']}  행수: {g.get('rowCount')}  쓰기가능: {g.get('writable')}")
-                if g.get("error"):
-                    say(f"  오류: {g['error']}")
-                for c in (g.get("columns") or []):
-                    say(f"    컬럼: name={c['name']}  header={c['header']}")
-                if g.get("sampleRow") is not None:
-                    say(f"    샘플행(마스킹): {json.dumps(g['sampleRow'], ensure_ascii=False)[:600]}")
-
+            say(f"대상 탭: {target.url[:130]}\n")
+            say(target.evaluate(PROBE))
         browser.close()
 except Exception:
     say("\n실패했습니다. 원인:")
@@ -162,6 +195,7 @@ OUT.write_text("\n".join(lines), encoding="utf-8")
 print()
 print("=" * 62)
 print(f"  저장됨: {OUT}")
+print("  이 파일을 보내주세요.")
 print("=" * 62)
 print()
 input("  창을 닫으려면 Enter >>> ")
