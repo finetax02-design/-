@@ -111,6 +111,23 @@ GOTO = r"""(args) => {
   return JSON.stringify({ ok: true, log: L, row: shown });
 }"""
 
+BUTTONS = r"""() => {
+  // 확인/취소 버튼은 dialog_content 밖 바닥쪽에 있어 앞선 덤프에서 빠졌다.
+  // 화면 전체에서 글자로 찾는다.
+  const out = [];
+  for (const el of document.querySelectorAll('button,a[role=button],[class*=btn],[class*=Btn]')) {
+    if (el.offsetParent === null) continue;
+    const t = (el.innerText || el.value || '').trim();
+    if (!/확인|취소|enter|esc/i.test(t)) continue;
+    const a = [];
+    for (const at of el.attributes) { if (at.name !== 'style') a.push(`${at.name}="${at.value.slice(0,40)}"`); }
+    const r = el.getBoundingClientRect();
+    out.push({ text: t.slice(0, 20), tag: el.tagName.toLowerCase(), attrs: a.join(' '),
+               x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) });
+  }
+  return JSON.stringify(out);
+}"""
+
 STATE = r"""(args) => {
   const g = window.__g, dp = window.__dp;
   try {
@@ -225,14 +242,36 @@ try:
         say(f"  팝업에서 선택된 줄: {json.dumps(res.get('row'), ensure_ascii=False)}")
         page.wait_for_timeout(400)
 
+        btns = json.loads(page.evaluate(BUTTONS))
+        say("")
+        say("확인/취소 버튼:")
+        for b in btns:
+            say(f"  \"{b['text']}\"  <{b['tag']} {b['attrs']}>  위치({b['x']},{b['y']})")
+
         print("\n  화면을 봐주세요. 팝업에서 그 계정이 선택되어 있나요?")
-        if input("  Enter 키로 확정할까요? (y) >>> ").strip().lower() != "y":
+        if input("  확정할까요? (y) >>> ").strip().lower() != "y":
             print("  확정하지 않고 esc 로 닫습니다.")
             page.keyboard.press("Escape")
             raise SystemExit
 
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(1200)
+        # Enter 키는 초점이 엉뚱한 곳에 있으면 안 먹는다.
+        # 확인 버튼은 HTML 이라 초점과 무관하게 클릭할 수 있다.
+        confirmed = False
+        for sel in ("button:has-text('확인(enter)')", "button:has-text('확인')",
+                    "[class*=btn]:has-text('확인(enter)')"):
+            try:
+                loc = page.locator(sel).last
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=4000)
+                    say(f"확인 버튼 클릭: {sel}")
+                    confirmed = True
+                    break
+            except Exception as exc:
+                say(f"  {sel} 클릭 실패: {str(exc)[:110]}")
+        if not confirmed:
+            say("확인 버튼을 못 눌러 Enter 키로 대신합니다.")
+            page.keyboard.press("Enter")
+        page.wait_for_timeout(1500)
 
         after = json.loads(page.evaluate(STATE, {"row": row}))
         say("")
