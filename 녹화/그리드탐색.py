@@ -1,11 +1,11 @@
-"""페이지 안의 RealGrid 객체를 찾아 다룰 수 있는지 확인한다 (v2).
+"""RealGrid 객체를 공식 API 로 꺼내 다룰 수 있는지 확인한다 (v3).
 
-v1 은 탐색 결과를 객체로 돌려주다가 변환에 실패했다. RealGrid 의 컬럼
-정보에는 그대로 넘길 수 없는 값이 섞여 있다. 그래서 v2 는 브라우저 쪽에서
-결과를 전부 글자로 만들어 한 덩어리로 넘긴다. 어떤 값이 들어와도 깨지지 않는다.
+v2 로 알아낸 것
+  window.RealGrid 는 함수이고 getGridInstance / getActiveGrid / exportGrid 를 갖고 있다.
+  GRID_TOP / GRID_DOWN 요소에는 React 내부 참조가 붙어 있다.
 
-탐색 범위도 넓혔다. RealGrid 객체가 전역에 없으면 Vue/React 내부와
-그리드 요소에 붙은 참조까지 뒤진다.
+v2 는 window 속성만 훑느라 정작 getGridInstance 를 불러보지 않았다.
+v3 은 그 API 를 직접 호출하고, 안 되면 React 내부를 타고 들어가 찾는다.
 
 거래처명과 금액은 마스킹한다.
 """
@@ -25,121 +25,142 @@ def say(text: str = "") -> None:
     lines.append(text)
 
 
-# 브라우저 안에서 실행되며, 결과를 글자 하나로 만들어 돌려준다.
 PROBE = r"""() => {
   const L = [];
   const log = s => L.push(String(s));
   const mask = v => {
     if (v === null || v === undefined) return '(빈값)';
-    try { return String(v).replace(/\d/g, '#').slice(0, 12); } catch (e) { return '(변환실패)'; }
+    try { return String(v).replace(/\d/g, '#').slice(0, 14); } catch (e) { return '(변환실패)'; }
   };
   const safe = (label, fn) => {
-    try { return fn(); } catch (e) { log(`  [${label}] 오류: ${String(e).slice(0, 150)}`); return null; }
+    try { return fn(); } catch (e) { log(`    [${label}] 오류: ${String(e).slice(0, 160)}`); return null; }
   };
-
-  const GRID_METHODS = ['getDataSource','setDataSource','getItemCount','getColumns',
-                        'getJsonRows','getRowCount','setValue','getValues','getValue',
-                        'setEditable','commit','refresh'];
+  const methodsOf = o => {
+    const out = [];
+    let cur = o;
+    for (let d = 0; d < 4 && cur; d++) {
+      for (const k of Object.getOwnPropertyNames(cur)) {
+        try { if (typeof o[k] === 'function' && !out.includes(k)) out.push(k); } catch (e) {}
+      }
+      cur = Object.getPrototypeOf(cur);
+    }
+    return out;
+  };
   const gridish = o => {
     if (!o || (typeof o !== 'object' && typeof o !== 'function')) return false;
-    let hits = 0;
-    for (const m of GRID_METHODS) { try { if (typeof o[m] === 'function') hits++; } catch (e) {} }
-    return hits >= 2;
+    let n = 0;
+    for (const m of ['getDataSource','getColumns','getItemCount','getRowCount','setValue','getValues','getJsonRows']) {
+      try { if (typeof o[m] === 'function') n++; } catch (e) {}
+    }
+    return n >= 2;
   };
 
-  log('===== 1. RealGrid 전역 이름 =====');
-  for (const n of ['RealGrid','RealGridJS','realgrid','RealGrid2','GridView']) {
-    safe(n, () => {
-      const t = typeof window[n];
-      log(`  window.${n} : ${t}`);
-      if (t === 'object' || t === 'function') {
-        const ks = Object.keys(window[n]).slice(0, 25);
-        log(`      속성: ${ks.join(', ')}`);
-      }
-    });
-  }
-
-  log('');
-  log('===== 2. window 안의 그리드 같은 객체 =====');
   const found = [];
-  let keys = [];
-  safe('window키', () => { keys = Object.keys(window); });
-  log(`  window 속성 ${keys.length}개 검사`);
-  for (const k of keys) {
-    safe('scan:' + k, () => {
-      const v = window[k];
-      if (gridish(v)) {
-        found.push({ path: 'window.' + k, obj: v });
-        const ms = GRID_METHODS.filter(m => { try { return typeof v[m] === 'function'; } catch (e) { return false; } });
-        log(`  window.${k}  →  ${ms.join(', ')}`);
-      }
-    });
-  }
-  if (!found.length) log('  없음');
+
+  log('===== 1. RealGrid 공식 API 로 꺼내기 =====');
+  safe('getGridInstance', () => {
+    if (typeof RealGrid.getGridInstance !== 'function') { log('  getGridInstance 없음'); return; }
+    for (const id of ['GRID_TOP','GRID_DOWN','GRID_TOP_line','gridTop','gridDown']) {
+      safe('inst:' + id, () => {
+        const g = RealGrid.getGridInstance(id);
+        log(`  getGridInstance("${id}") → ${g ? (gridish(g) ? '그리드 객체!' : typeof g) : '없음'}`);
+        if (gridish(g)) found.push({ path: `RealGrid.getGridInstance("${id}")`, obj: g });
+      });
+    }
+  });
+  safe('getActiveGrid', () => {
+    const g = RealGrid.getActiveGrid();
+    log(`  getActiveGrid() → ${g ? (gridish(g) ? '그리드 객체!' : typeof g) : '없음'}`);
+    if (gridish(g)) found.push({ path: 'RealGrid.getActiveGrid()', obj: g });
+  });
+  safe('exportGrid', () => {
+    log(`  exportGrid: ${typeof RealGrid.exportGrid}`);
+  });
 
   log('');
-  log('===== 3. 그리드 요소에 붙은 내부 참조 =====');
+  log('===== 2. React 내부를 타고 찾기 =====');
   for (const id of ['GRID_TOP','GRID_DOWN']) {
-    safe('el:' + id, () => {
+    safe('react:' + id, () => {
       const el = document.getElementById(id);
       if (!el) { log(`  ${id}: 요소 없음`); return; }
-      const ks = Object.keys(el).filter(k => k.startsWith('_') || k.startsWith('$'));
-      log(`  ${id}: ${ks.length ? ks.slice(0, 20).join(', ') : '(내부 참조 없음)'}`);
-      for (const k of ks) {
-        safe('elref', () => {
-          const v = el[k];
-          if (gridish(v)) { found.push({ path: `#${id}.${k}`, obj: v }); log(`      → ${k} 가 그리드!`); }
-          // Vue 컴포넌트면 그 안의 속성도 한 겹 본다
-          if (v && typeof v === 'object') {
-            for (const inner of ['ctx','proxy','setupState','data','$data','$refs']) {
-              const iv = v[inner];
-              if (iv && typeof iv === 'object') {
-                for (const ik of Object.keys(iv).slice(0, 60)) {
-                  if (gridish(iv[ik])) {
-                    found.push({ path: `#${id}.${k}.${inner}.${ik}`, obj: iv[ik] });
-                    log(`      → ${k}.${inner}.${ik} 가 그리드!`);
-                  }
+      const key = Object.keys(el).find(k => k.startsWith('__react'));
+      if (!key) { log(`  ${id}: React 참조 없음`); return; }
+      let node = el[key];
+      let hit = false;
+      for (let d = 0; d < 25 && node; d++) {
+        for (const slot of ['stateNode','memoizedProps','memoizedState']) {
+          safe('slot', () => {
+            const s = node[slot];
+            if (!s || typeof s !== 'object') return;
+            if (gridish(s)) { found.push({ path: `#${id} react.${slot}(깊이${d})`, obj: s }); log(`  ${id}: ${slot} 깊이${d} 에서 발견`); hit = true; }
+            for (const k of Object.keys(s).slice(0, 80)) {
+              try {
+                if (gridish(s[k])) {
+                  found.push({ path: `#${id} react.${slot}.${k}(깊이${d})`, obj: s[k] });
+                  log(`  ${id}: ${slot}.${k} 깊이${d} 에서 발견`);
+                  hit = true;
                 }
-              }
+              } catch (e) {}
             }
-          }
-        });
+          });
+        }
+        node = node.return || node._owner || null;
       }
+      if (!hit) log(`  ${id}: React 경로에서는 못 찾음`);
     });
   }
 
   log('');
-  log('===== 4. 찾은 객체에서 실제로 꺼내보기 =====');
-  if (!found.length) log('  꺼내볼 객체가 없습니다.');
+  log('===== 3. 꺼낸 객체 살펴보기 =====');
+  if (!found.length) { log('  찾지 못했습니다.'); return L.join('\n'); }
+
+  const seen = [];
   for (const f of found) {
+    if (seen.includes(f.obj)) { log(`\n  --- ${f.path} (위와 같은 객체) ---`); continue; }
+    seen.push(f.obj);
     log(`\n  --- ${f.path} ---`);
     const g = f.obj;
+
+    safe('methods', () => {
+      const ms = methodsOf(g).filter(m => /get|set|commit|refresh|export|update|value|row|column|cell|check/i.test(m));
+      log(`    메서드 ${ms.length}개: ${ms.slice(0, 60).join(', ')}`);
+    });
+
     safe('columns', () => {
       if (typeof g.getColumns !== 'function') { log('    getColumns 없음'); return; }
       const cols = g.getColumns();
       log(`    컬럼 ${cols.length}개`);
-      cols.slice(0, 40).forEach((c, i) => {
-        let name = '', head = '';
-        try { name = String(c.name || c.fieldName || ''); } catch (e) {}
+      cols.slice(0, 45).forEach((c, i) => {
+        let name = '', head = '', field = '';
+        try { name = String(c.name || ''); } catch (e) {}
+        try { field = String(c.fieldName || ''); } catch (e) {}
         try {
           const h = c.header;
           head = h == null ? '' : (typeof h === 'object' ? String(h.text || '') : String(h));
         } catch (e) {}
-        log(`      ${i}: name=${name}  header=${head}`);
+        log(`      ${i}: name=${name}  field=${field}  header=${head}`);
       });
     });
+
     let src = g;
     safe('datasource', () => {
       if (typeof g.getDataSource === 'function') {
         const dp = g.getDataSource();
-        if (dp) { src = dp; log('    getDataSource() 있음'); }
+        if (dp) {
+          src = dp;
+          log('    getDataSource() 있음');
+          const ms = methodsOf(dp).filter(m => /get|set|row|value|json|update|commit/i.test(m));
+          log(`      데이터원본 메서드: ${ms.slice(0, 50).join(', ')}`);
+        }
       }
     });
+
     safe('rowcount', () => {
       for (const m of ['getRowCount','getItemCount']) {
-        if (typeof src[m] === 'function') { log(`    ${m}() = ${src[m]()}`); }
+        if (typeof src[m] === 'function') log(`    ${m}() = ${src[m]()}`);
       }
     });
+
     safe('sample', () => {
       if (typeof src.getJsonRows === 'function') {
         const rows = src.getJsonRows(0, 1);
@@ -150,13 +171,13 @@ PROBE = r"""() => {
         }
       }
       if (typeof src.getValues === 'function') {
-        const vals = src.getValues(0);
-        log('    샘플행(마스킹): ' + (vals || []).map(mask).join(' | '));
+        log('    샘플행(마스킹): ' + (src.getValues(0) || []).map(mask).join(' | '));
       }
     });
+
     safe('writable', () => {
-      const w = ['setValue','setValues','updateRow','setEditable']
-        .filter(m => typeof src[m] === 'function' || typeof g[m] === 'function');
+      const w = ['setValue','setValues','updateRow','updateRows','setEditable','checkAll','setCheckedRows']
+        .filter(m => { try { return typeof src[m] === 'function' || typeof g[m] === 'function'; } catch (e) { return false; } });
       log(`    쓰기 메서드: ${w.length ? w.join(', ') : '없음'}`);
     });
   }
@@ -167,7 +188,7 @@ PROBE = r"""() => {
 
 print()
 print("=" * 62)
-print("  RealGrid 객체 탐색 (v2)")
+print("  RealGrid 객체 탐색 (v3)")
 print("=" * 62)
 print()
 print("  크롬열기.bat 으로 띄운 크롬에서")
@@ -195,7 +216,6 @@ OUT.write_text("\n".join(lines), encoding="utf-8")
 print()
 print("=" * 62)
 print(f"  저장됨: {OUT}")
-print("  이 파일을 보내주세요.")
 print("=" * 62)
 print()
 input("  창을 닫으려면 Enter >>> ")
