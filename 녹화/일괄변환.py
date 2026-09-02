@@ -363,22 +363,61 @@ def 창읽기(page, 제목, 기다림초=8):
     return d
 
 
+def 라디오누르기(page, d, code):
+    """사유 하나를 진짜 마우스로 누르고, 실제로 옮겨졌는지 다시 읽어 돌려준다."""
+    표적 = next((r for r in d["라디오"] if r["코드"] == code), None)
+    if not 표적:
+        return None, d
+    page.mouse.click(표적["x"], 표적["y"])
+    page.wait_for_timeout(500)
+    d2 = json.loads(page.evaluate(POPUP))
+    골라진 = [r for r in d2["라디오"] if r["골라짐"]]
+    return (골라진[0]["코드"] if len(골라진) == 1 else None), d2
+
+
 def 사유창(page, d, code):
-    """사유 창이면 골라진 사유를 대조하고 확인한다. 진행해도 되면 True."""
+    """사유 창이면 사유를 제대로 옮기고 확인한다. 진행해도 되면 True.
+
+    창에는 바라던 사유가 이미 골라진 것처럼 보인다. 그런데 위하고가
+    실제로 쓰는 값은 따로 있고 거기엔 4 가 남아 있다. 이미 표시가 있는
+    자리를 눌러봐야 '바뀜' 이 일어나지 않아 전달되지 않는다.
+    그래서 다른 사유를 한 번 거쳐 갔다가 바라던 사유로 돌아온다.
+    두 번 다 '바뀜' 이 일어나므로 위하고가 알아듣는다.
+    """
     if not d["라디오"]:
         return True
-    골라진 = [r for r in d["라디오"] if r["골라짐"]]
-    if len(골라진) != 1:
-        say(f"  [멈춤] 골라진 사유가 {len(골라진)}개입니다. 확인하지 않습니다.")
-        say("  화면의 닫기를 눌러주세요.")
+    있는코드 = {r["코드"] for r in d["라디오"]}
+    if code not in 있는코드:
+        say(f"  [멈춤] 사유 {code} 가 창에 없습니다. 있는 것: {sorted(있는코드)}")
+        say("  화면의 취소(esc) 단추를 눌러주세요.")
         return False
-    if 골라진[0]["코드"] != code:
-        say(f"  [멈춤] 사유 {code} 를 바랐는데 {골라진[0]['글자']} 가 골라져 있습니다.")
-        say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
+
+    딴것 = next((c for c in ("4", "3", "0", "1", "2") if c in 있는코드 and c != code), None)
+    if 딴것 is None:
+        say("  [멈춤] 거쳐 갈 다른 사유가 없습니다.")
+        say("  화면의 취소(esc) 단추를 눌러주세요.")
         return False
-    say(f"  사유 {골라진[0]['글자']} 가 이미 골라져 있습니다. 바라던 것과 같습니다.")
+
+    처음 = [r["코드"] for r in d["라디오"] if r["골라짐"]]
+    say(f"  창이 뜰 때 표시된 사유: {처음 or '없음'}")
+
+    골라진, d = 라디오누르기(page, d, 딴것)
+    say(f"  거쳐 가려고 사유 {딴것} 를 눌렀더니 → {골라진 or '읽지 못함'}")
+    if 골라진 != 딴것:
+        say("  [멈춤] 사유를 눌러도 옮겨지지 않습니다.")
+        say("  화면의 취소(esc) 단추를 눌러 닫아주세요. 사유가 잘못 들어가면 안 됩니다.")
+        return False
+
+    골라진, d = 라디오누르기(page, d, code)
+    say(f"  바라던 사유 {code} 를 눌렀더니 → {골라진 or '읽지 못함'}")
+    if 골라진 != code:
+        say(f"  [멈춤] 사유 {code} 로 옮기지 못했습니다.")
+        say("  화면의 취소(esc) 단추를 눌러 닫아주세요.")
+        return False
+
+    say(f"  사유 {code} {사유이름.get(code, '')} 로 제대로 옮겼습니다.")
     if input("\n  이 사유로 확인할까요? (y) >>> ").strip().lower() != "y":
-        say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
+        say("사용자가 중단했습니다. 화면의 취소(esc) 를 눌러주세요.")
         return False
     for 글자 in ("선택(enter)", "선택(Enter)", "확인(Enter)", "확인(enter)", "선택", "확인"):
         if 누르기(page, 글자):
@@ -448,7 +487,11 @@ try:
             ty = str(r.get("ty_mth2") or "")
             cd = str(r.get("cd_notdedct") or "")
             if ty == 불공 and cd in 사유이름:
-                본보기[cd].append(i)
+                # 규칙표와 어긋나는 줄은 본보기로 쓰지 않는다.
+                # 잘못 들어간 줄이 본보기가 되어 잘못을 퍼뜨리면 안 된다.
+                규칙 = rules.get(str(r.get("no_bisocial") or ""))
+                if 규칙 is None or 규칙 == cd:
+                    본보기[cd].append(i)
             elif ty == 과세:
                 code = rules.get(str(r.get("no_bisocial") or ""))
                 if code:
