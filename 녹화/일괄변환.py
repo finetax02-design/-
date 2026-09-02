@@ -100,9 +100,10 @@ GRAB = r"""() => {
 }"""
 
 
-# 본보기 줄의 '유형' 칸을 현재 칸으로 만든다.
-# 어느 칸을 잡았는지가 곧 무엇을 바꿀지 고르는 것이다. 거래처 칸이면 안 된다.
-SET_TYPE_CELL = r"""(args) => {
+# 본보기 줄이 그대로인지 확인하고, 그 줄이 화면에 보이게 한다.
+# setCurrent 로는 안 된다. 파란 테두리만 옮길 뿐 위하고는 못 알아듣는다.
+# 진짜 마우스로 유형 칸을 눌러야 '유형을 바꾸겠다' 는 뜻이 전달된다.
+PREP_TEMPLATE = r"""(args) => {
   const g = window.__g;
   if (!g) return JSON.stringify({ ok: false, reason: '그리드 없음' });
   let src = g;
@@ -114,13 +115,23 @@ SET_TYPE_CELL = r"""(args) => {
     return JSON.stringify({ ok: false,
       reason: `본보기 줄이 달라졌습니다 (유형 ${r.ty_mth2} 사유 ${r.cd_notdedct})` });
   }
-  try { g.setCurrent({ itemIndex: args.row, dataRow: args.row,
-                       column: 'ty_mth2', fieldName: 'ty_mth2' }); }
-  catch (e) { return JSON.stringify({ ok: false, reason: 'setCurrent ' + String(e).slice(0, 90) }); }
-  try { if (g.setFocusToGrid) g.setFocusToGrid(); } catch (e) {}
-  let 잡은칸 = '';
-  try { const c = g.getCurrent(); 잡은칸 = (c && (c.fieldName || c.column)) || ''; } catch (e) {}
-  return JSON.stringify({ ok: true, 거래처: r.nm_trade, 잡은칸: 잡은칸 });
+  try { if (typeof g.setTopItem === 'function') g.setTopItem(args.row); }
+  catch (e) { return JSON.stringify({ ok: false, reason: 'setTopItem ' + String(e).slice(0, 80) }); }
+  return JSON.stringify({ ok: true, 거래처: r.nm_trade });
+}"""
+
+# 유형 칸이 화면 어디에 있는지 묻는다. 화면 좌표를 그대로 돌려준다.
+CELL_BOUNDS = r"""(args) => {
+  const g = window.__g;
+  try {
+    const b = g.getCellBounds(args.row, 'ty_mth2');
+    if (!b) return JSON.stringify({ ok: false, reason: '칸 자리를 못 얻음' });
+    return JSON.stringify({ ok: true, x: b.x, y: b.y, w: b.width, h: b.height });
+  } catch (e) { return JSON.stringify({ ok: false, reason: String(e).slice(0, 90) }); }
+}"""
+
+CURRENT = r"""() => {
+  try { return JSON.stringify(window.__g.getCurrent() || {}); } catch (e) { return '{}'; }
 }"""
 
 # 바꿀 줄들을 체크한다. 세는 방법이 하나만으로는 못 미더워 여러 가지로 확인한다.
@@ -396,13 +407,39 @@ try:
             raise SystemExit
         say(f"  {len(묶음)}줄 체크 확인")
 
-        # 2 본보기 줄의 유형 칸을 잡는다. 이것이 '유형을 바꾸겠다' 는 뜻이 된다.
-        res = json.loads(page.evaluate(SET_TYPE_CELL,
+        # 2 본보기 줄의 유형 칸을 진짜 마우스로 누른다.
+        #   어느 칸을 눌렀는지가 곧 '무엇을 바꿀지' 고르는 것이다.
+        res = json.loads(page.evaluate(PREP_TEMPLATE,
                                        {"row": tmpl, "want_ty": 불공, "want_cd": code}))
         if not res.get("ok"):
-            say(f"본보기 줄의 유형 칸을 못 잡았습니다: {res.get('reason')}")
+            say(f"본보기 줄을 준비하지 못했습니다: {res.get('reason')}")
             raise SystemExit
-        say(f"  본보기 줄 {res.get('거래처')} 의 유형 칸을 잡았습니다 (잡은 칸: {res.get('잡은칸')})")
+        page.wait_for_timeout(500)
+        bd = json.loads(page.evaluate(CELL_BOUNDS, {"row": tmpl}))
+        if not bd.get("ok"):
+            say(f"유형 칸의 자리를 못 얻었습니다: {bd.get('reason')}")
+            raise SystemExit
+        x = bd["x"] + bd["w"] / 2
+        y = bd["y"] + bd["h"] / 2
+        if not (0 < x < 4000 and 0 < y < 3000):
+            say(f"유형 칸이 화면 밖입니다 ({x:.0f},{y:.0f}).")
+            raise SystemExit
+        page.mouse.click(x, y)
+        page.wait_for_timeout(500)
+        cur = json.loads(page.evaluate(CURRENT))
+        if cur.get("itemIndex") != tmpl or cur.get("fieldName") != "ty_mth2":
+            say(f"  [멈춤] 유형 칸을 눌렀는데 잡힌 것이 다릅니다: {cur}")
+            raise SystemExit
+        say(f"  본보기 줄 {res.get('거래처')} 의 유형 칸을 눌렀습니다"
+            f" ({x:.0f},{y:.0f} / 잡힌 칸 {cur.get('fieldName')})")
+
+        # 칸을 누르는 사이에 체크가 풀리지 않았는지 다시 본다
+        화면수2 = page.evaluate(SELECTED_TEXT)
+        if 화면수2.isdigit() and int(화면수2) != len(묶음):
+            say(f"  [멈춤] 칸을 누른 뒤 선택됨이 {화면수2}건으로 바뀌었습니다"
+                f" ({len(묶음)}건이어야 합니다).")
+            raise SystemExit
+        say(f"  칸을 누른 뒤에도 선택됨 {화면수2 or '못 읽음'}건")
 
         첫줄 = rows[묶음[0]]
         print()
@@ -410,7 +447,7 @@ try:
         print("   화면에서 세 가지를 확인해주세요.")
         print()
         print(f"   1) 본보기 줄  {tmpl + 1}번째  {t.get('s_date')} {t.get('nm_trade')}")
-        print(f"      -> 그 줄의 '유형' 칸(불공)이 파란 테두리로 잡혀 있어야 합니다.")
+        print(f"      -> 그 줄의 '유형' 칸(불공)을 눌러 두었습니다. 잡혀 있어야 합니다.")
         print(f"   2) 바꿀 줄 {len(묶음)}건 (첫 줄: {묶음[0] + 1}번째 {첫줄.get('nm_trade')})")
         print(f"      -> 체크표시가 들어가 있어야 합니다.")
         print(f"   3) 화면 왼쪽 아래에 '{len(묶음)}건 선택됨' 이 보여야 합니다.")
@@ -464,13 +501,20 @@ try:
                 raise SystemExit
             d = 창읽기(page, "사유를 고른 뒤")
 
-        # 5 마무리 확인창이 있으면 건수를 대조한다
-        if d["표"] or "일괄변경 하시겠" in " ".join(d["안내"]):
+        # 5 마무리 확인창이 있으면 내용과 건수를 대조한다
+        글전체 = " ".join(d["안내"]) + " " + " ".join(" ".join(r) for r in d["표"])
+        if d["표"] or "일괄변경 하시겠" in 글전체:
+            if "불공" not in 글전체:
+                say("  [멈춤] 확인창의 변경내용이 비어 있습니다.")
+                say("  무엇을 바꿀지가 위하고에 전달되지 않았습니다.")
+                say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
+                raise SystemExit
             숫자 = [int(n) for row in d["표"] for c in row for n in re.findall(r"\b(\d+)\b", c)]
             if 숫자 and len(묶음) not in 숫자:
                 say(f"  [멈춤] 확인창의 숫자 {숫자} 가 체크한 {len(묶음)}건과 다릅니다.")
                 say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
                 raise SystemExit
+            say(f"  확인창에 불공으로 바꾼다고 적혀 있습니다.")
             if input("\n  확인을 눌러 실제로 바꿀까요? (y) >>> ").strip().lower() != "y":
                 say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
                 raise SystemExit
