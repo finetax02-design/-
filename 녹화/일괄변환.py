@@ -39,11 +39,14 @@ OUT = HERE / "일괄변환기록.txt"
 사유이름 = {"3": "비영업용승용차유지", "4": "면세사업관련", "5": "공통매입세액안분"}
 
 GRAB = r"""() => {
+  // 같은 열 구성을 가진 그리드가 여러 개일 수 있다. 화면에 안 보이는 빈 것도 있다.
+  // 그래서 하나만 찾고 멈추지 않고 전부 모은 뒤 자료가 가장 많은 것을 고른다.
   const gridish = o => {
     if (!o || (typeof o !== 'object' && typeof o !== 'function')) return false;
     try { return typeof o.getColumns === 'function' && typeof o.getValues === 'function'; }
     catch (e) { return false; }
   };
+  const found = [];
   const seen = new WeakSet();
   const queue = [{ o: window, d: 0 }];
   const SKIP = /^(document|location|navigator|parent|top|self|frames|history|localStorage|sessionStorage|indexedDB|caches|crypto)$/;
@@ -64,20 +67,31 @@ GRAB = r"""() => {
       if (gridish(v)) {
         let names = [];
         try { names = v.getColumns().map(c => String(c.name || c.fieldName || '')); } catch (e) {}
-        if (names.includes('nm_acctit_cha')) {
-          window.__g = v;
-          let src = v;
-          try { const dp = v.getDataSource(); if (dp) src = dp; } catch (e) {}
-          let rows = [];
-          try { const n = src.getRowCount(); rows = n ? (src.getJsonRows(0, n - 1) || []) : []; }
-          catch (e) {}
-          return JSON.stringify({ ok: true, rows: rows });
-        }
+        if (names.includes('nm_acctit_cha')) found.push(v);
       }
       if (d < 9) queue.push({ o: v, d: d + 1 });
     }
   }
-  return JSON.stringify({ ok: false, reason: '전표 목록을 못 찾음' });
+  if (!found.length) return JSON.stringify({ ok: false, reason: '전표 목록을 못 찾음' });
+
+  const 후보 = [];
+  let best = null, bestN = -1;
+  for (const g of found) {
+    let src = g, n = 0, err = '';
+    try { const dp = g.getDataSource(); if (dp) src = dp; } catch (e) {}
+    try { n = src.getRowCount() || 0; } catch (e) { err = String(e).slice(0, 60); }
+    후보.push({ 건수: n, 오류: err });
+    if (n > bestN) { bestN = n; best = { g: g, src: src, n: n }; }
+  }
+  if (!best || best.n <= 0) {
+    return JSON.stringify({ ok: false, reason: '전표 목록은 찾았으나 자료가 없음', 후보: 후보 });
+  }
+  window.__g = best.g;
+  let rows = [], err = '';
+  try { rows = best.src.getJsonRows(0, best.n - 1) || []; }
+  catch (e) { err = String(e).slice(0, 120); }
+  return JSON.stringify({ ok: rows.length > 0, rows: rows, 후보: 후보,
+                          reason: rows.length ? '' : ('자료를 읽지 못함 ' + err) });
 }"""
 
 # 본보기 줄을 현재 줄로 만든다. 사용자가 손으로 클릭하는 것과 같은 상태.
@@ -230,22 +244,38 @@ input("  준비되었으면 Enter >>> ")
 try:
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(CDP)
-        pages = [pg for ctx in browser.contexts for pg in ctx.pages]
-        page = next((pg for pg in pages if "smarta.wehago.com" in pg.url), None)
-        if page is None:
+        pages = [pg for ctx in browser.contexts for pg in ctx.pages
+                 if "smarta.wehago.com" in pg.url]
+        if not pages:
             say("smarta.wehago.com 탭을 찾지 못했습니다.")
             raise SystemExit
-        page.bring_to_front()
+        # 위하고 탭이 여러 개 열려 있을 수 있다. 전자세금계산서 화면을 먼저 본다.
+        pages.sort(key=lambda pg: "SAAC0103" not in pg.url)
+        say(f"위하고 탭 {len(pages)}개를 봅니다.")
 
-        data = json.loads(page.evaluate(GRAB))
-        if not data.get("ok"):
-            say(f"  {data.get('reason')}")
+        page, rows, data = None, None, None
+        for pg in pages:
+            꼬리 = pg.url.split("/#/")[-1][:60]
+            try:
+                d = json.loads(pg.evaluate(GRAB))
+            except Exception as e:
+                say(f"  탭 {꼬리} : 읽기 실패 {str(e)[:80]}")
+                continue
+            if d.get("ok") and d.get("rows"):
+                page, rows, data = pg, d["rows"], d
+                say(f"  탭 {꼬리} : 전표 {len(rows)}건")
+                break
+            say(f"  탭 {꼬리} : {d.get('reason') or '자료 없음'}"
+                + (f" (그리드 {len(d.get('후보', []))}개 건수 "
+                   + ",".join(str(c['건수']) for c in d.get('후보', [])) + ")"
+                   if d.get('후보') else ""))
+        if page is None:
+            say("")
+            say("자료가 들어 있는 전자세금계산서 탭을 찾지 못했습니다.")
+            say("전자세금계산서 화면에서 조회를 한 번 더 누른 뒤 다시 실행해주세요.")
             raise SystemExit
-        rows = data["rows"]
+        page.bring_to_front()
         say(f"전표 {len(rows)}건을 읽었습니다.")
-        if not rows:
-            say("화면에 자료가 없습니다.")
-            raise SystemExit
 
         # 사유별로 바꿀 줄과 본보기 줄을 나눈다
         대상 = collections.defaultdict(list)
