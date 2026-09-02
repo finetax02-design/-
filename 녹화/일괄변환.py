@@ -1,23 +1,28 @@
 """과세 -> 불공 일괄변환. 불공제사유까지 한 번에 바꾼다.
 
-불공제사유 라디오는 어떤 방법으로도 눌리지 않았다. 여섯 번 실패했다.
-그래서 라디오를 아예 건드리지 않는 길로 간다.
+위하고 일괄변경의 순서는 이렇다. 사용자가 손으로 하는 것과 같다.
 
-위하고 일괄변경의 원리는 이렇다.
-  1 사유가 정확히 들어간 불공 줄 하나를 클릭해서 현재 줄로 만든다  (본보기 줄)
+  1 사유가 정확히 들어간 불공 줄 하나를 손으로 만들어 둔다  (본보기 줄)
   2 바꿀 줄들을 전부 체크한다
-  3 일괄변경 > 전체일괄변경 을 누른다
-  4 확인창에 '과세유형 | 불공 | 몇건' 이 뜨면 확인
-그러면 체크한 줄들이 본보기 줄과 같은 불공 + 같은 사유로 바뀐다.
-라디오를 누를 일이 없다.
+  3 본보기 줄의 '유형' 칸을 클릭한다
+  4 오른쪽 맨 아래 일괄변경 > 전체일괄변경
+  5 불공제사유 창이 뜨면 사유를 고르고 확인
+  
+3번이 핵심이다. 어느 칸을 클릭했는지가 곧 '무엇을 바꿀지' 고르는 것이다.
+거래처 칸을 잡은 채로 실행하면
+'[품명] [유형] [차변계정] [대변계정] [관리] [전표상태] 선택후, 실행하세요'
+라는 안내만 뜬다. 유형 칸을 잡아야 유형이 바뀐다.
 
-일괄변경은 본보기가 하나뿐이라 사유도 하나씩만 처리된다.
-그래서 사유 3, 4, 5 를 한 번에 한 사유씩 돌린다.
+5번의 사유 창은 현재 줄의 사유를 미리 골라 놓고 뜬다.
+본보기 줄이 현재 줄이므로 본보기의 사유가 이미 골라져 있다.
+그래서 라디오를 누를 일이 없다. 여섯 번 실패한 그 라디오다.
+다만 정말 그런지 믿지 않고, 무엇이 골라져 있는지 읽어 대조한 뒤에만 확인한다.
 
 안전장치
-  - 본보기 줄은 사용자가 눈으로 확인한 뒤에만 쓴다
-  - 체크한 건수와 확인창의 건수가 다르면 멈춘다
-  - 바꾼 뒤 실제로 유형과 사유가 맞게 들어갔는지 다시 읽어 대조한다
+  - 본보기 줄의 유형과 사유를 잡기 직전에 다시 확인한다
+  - 체크한 건수를 화면의 '선택됨 N건' 글자와도 맞춰 본다
+  - 사유 창에 골라진 사유가 원하는 것과 다르면 확인하지 않고 멈춘다
+  - 바꾼 뒤 실제로 유형과 사유가 들어갔는지 거래처명으로 대조한다
   - 전송(F3)은 절대 부르지 않는다
 """
 import collections
@@ -94,8 +99,10 @@ GRAB = r"""() => {
                           reason: rows.length ? '' : ('자료를 읽지 못함 ' + err) });
 }"""
 
-# 본보기 줄을 현재 줄로 만든다. 사용자가 손으로 클릭하는 것과 같은 상태.
-SET_CURRENT = r"""(args) => {
+
+# 본보기 줄의 '유형' 칸을 현재 칸으로 만든다.
+# 어느 칸을 잡았는지가 곧 무엇을 바꿀지 고르는 것이다. 거래처 칸이면 안 된다.
+SET_TYPE_CELL = r"""(args) => {
   const g = window.__g;
   if (!g) return JSON.stringify({ ok: false, reason: '그리드 없음' });
   let src = g;
@@ -105,17 +112,18 @@ SET_CURRENT = r"""(args) => {
   if (!r) return JSON.stringify({ ok: false, reason: '줄을 못 읽음' });
   if (String(r.ty_mth2) !== args.want_ty || String(r.cd_notdedct) !== args.want_cd) {
     return JSON.stringify({ ok: false,
-      reason: `본보기 줄이 달라짐 (유형 ${r.ty_mth2} 사유 ${r.cd_notdedct})` });
+      reason: `본보기 줄이 달라졌습니다 (유형 ${r.ty_mth2} 사유 ${r.cd_notdedct})` });
   }
   try { g.setCurrent({ itemIndex: args.row, dataRow: args.row,
-                       column: 'nm_trade', fieldName: 'nm_trade' }); }
+                       column: 'ty_mth2', fieldName: 'ty_mth2' }); }
   catch (e) { return JSON.stringify({ ok: false, reason: 'setCurrent ' + String(e).slice(0, 90) }); }
   try { if (g.setFocusToGrid) g.setFocusToGrid(); } catch (e) {}
-  let cur = null;
-  try { cur = g.getCurrent(); } catch (e) {}
-  return JSON.stringify({ ok: true, 거래처: r.nm_trade, 현재: cur && cur.itemIndex });
+  let 잡은칸 = '';
+  try { const c = g.getCurrent(); 잡은칸 = (c && (c.fieldName || c.column)) || ''; } catch (e) {}
+  return JSON.stringify({ ok: true, 거래처: r.nm_trade, 잡은칸: 잡은칸 });
 }"""
 
+# 바꿀 줄들을 체크한다. 세는 방법이 하나만으로는 못 미더워 여러 가지로 확인한다.
 CHECK_ROWS = r"""(args) => {
   const g = window.__g;
   const L = [];
@@ -128,24 +136,94 @@ CHECK_ROWS = r"""(args) => {
     else if (typeof g.checkItem === 'function') for (const r of args.rows) g.checkItem(r, true);
     else return JSON.stringify({ ok: false, reason: '체크할 방법이 없음', log: L });
   } catch (e) { return JSON.stringify({ ok: false, reason: '체크 오류 ' + String(e).slice(0, 120), log: L }); }
-  let after = [];
+
+  let 센수 = -1;
+  for (const m of ['getCheckedItemIndices', 'getCheckedRows', 'getCheckedItems']) {
+    try {
+      if (typeof g[m] === 'function') {
+        const v = g[m]();
+        if (Array.isArray(v)) { 센수 = v.length; L.push(`${m} 로 ${v.length}줄`); break; }
+      }
+    } catch (e) {}
+  }
+  // 위의 것이 못 미더울 때를 대비해 한 줄씩 물어본다
+  let 하나씩 = -1;
   try {
-    if (typeof g.getCheckedItemIndices === 'function') after = g.getCheckedItemIndices() || [];
-    else if (typeof g.getCheckedRows === 'function') after = g.getCheckedRows() || [];
+    if (typeof g.isCheckedItem === 'function') {
+      하나씩 = 0;
+      for (const r of args.rows) if (g.isCheckedItem(r)) 하나씩++;
+      L.push(`한 줄씩 물어보니 ${하나씩}줄`);
+    }
   } catch (e) {}
-  L.push(`${args.rows.length}줄 체크 요청, 실제 체크 ${after.length}줄`);
-  return JSON.stringify({ ok: after.length === args.rows.length, checked: after, log: L,
-    reason: after.length === args.rows.length ? '' : '체크된 줄 수가 다릅니다' });
+  return JSON.stringify({ 요청: args.rows.length, 센수: 센수, 하나씩: 하나씩, log: L });
 }"""
 
-# 글자가 정확히 일치하는 화면상의 누를 것을 찾는다. 오른쪽 아래에 있는 것을 고른다.
+# 화면 아래의 '선택됨 N건' 글자를 읽는다. 그리드가 세는 것과 맞는지 보려는 것이다.
+SELECTED_TEXT = r"""() => {
+  for (const el of document.querySelectorAll('span,div,em')) {
+    if (el.offsetParent === null) continue;
+    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    const m = t.match(/^(\d+)건\s*선택됨$|^선택됨\s*(\d+)건$/);
+    if (m) return m[1] || m[2];
+  }
+  // 글자가 두 조각으로 나뉘어 있을 수 있다
+  for (const el of document.querySelectorAll('div')) {
+    if (el.offsetParent === null) continue;
+    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    if (t.length < 20 && t.includes('선택됨')) {
+      const m = t.match(/(\d+)\s*건/);
+      if (m) return m[1];
+    }
+  }
+  return '';
+}"""
+
+# 지금 열려 있는 창을 읽는다. 사유 라디오, 표, 안내글, 단추를 함께 본다.
+POPUP = r"""() => {
+  const 안내 = [];
+  const 표 = [];
+  const 단추 = [];
+  const 라디오 = [];
+
+  // 사유 라디오. 껍데기가 한 벌 더 있으므로 크기가 있는 것만 본다.
+  for (const el of document.querySelectorAll('input[type=radio]')) {
+    const lab = el.closest('label') || el.parentElement;
+    if (!lab) continue;
+    const r = lab.getBoundingClientRect();
+    if (r.width < 3 || r.height < 3) continue;
+    const t = (lab.innerText || '').trim().replace(/\s+/g, ' ');
+    if (!/^[0-9A-B][.\s]/.test(t)) continue;
+    라디오.push({ 코드: t[0], 글자: t.slice(0, 26), 골라짐: !!el.checked,
+                  x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+  }
+
+  const boxes = [...document.querySelectorAll('div,section,dialog')].filter(el => {
+    if (el.offsetParent === null) return false;
+    if (el.clientHeight < 60 || el.clientWidth < 180) return false;
+    const c = (el.className || '').toString();
+    return /dialog|modal|popup|layer/i.test(c);
+  });
+  boxes.sort((a, b) => (a.clientHeight * a.clientWidth) - (b.clientHeight * b.clientWidth));
+  for (const box of boxes.slice(0, 3)) {
+    const t = (box.innerText || '').trim().replace(/\s+/g, ' ');
+    if (t && !안내.includes(t)) 안내.push(t.slice(0, 300));
+    for (const tb of box.querySelectorAll('table'))
+      for (const tr of tb.rows) 표.push([...tr.cells].map(c => (c.innerText || '').trim()));
+    for (const b of box.querySelectorAll('button,[class*=btn],[class*=Btn],[role=button]')) {
+      if (b.offsetParent === null) continue;
+      const bt = (b.innerText || b.value || '').trim();
+      if (bt && bt.length <= 20 && !단추.includes(bt)) 단추.push(bt);
+    }
+  }
+  return JSON.stringify({ 안내: 안내, 표: 표.slice(0, 12), 단추: 단추, 라디오: 라디오 });
+}"""
+
+# 글자가 정확히 같은 것을 찾아 누른다
 FIND = r"""(args) => {
   const out = [];
-  const els = document.querySelectorAll('button, a, li, span, div, [role=button], [role=menuitem]');
-  for (const el of els) {
+  for (const el of document.querySelectorAll('button, a, li, span, div, [role=button], [role=menuitem]')) {
     const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
     if (t !== args.text) continue;
-    // 글자만 가진 가장 안쪽 요소를 고른다
     let inner = true;
     for (const c of el.children) {
       const ct = (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ');
@@ -156,38 +234,9 @@ FIND = r"""(args) => {
     if (r.width < 2 || r.height < 2) continue;
     const st = getComputedStyle(el);
     if (st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') continue;
-    out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
-               w: Math.round(r.width), h: Math.round(r.height),
-               tag: el.tagName.toLowerCase(), cls: (el.className || '').toString().slice(0, 50) });
+    out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
   }
   return JSON.stringify(out);
-}"""
-
-# 열린 확인창의 내용을 읽는다
-DIALOG = r"""() => {
-  const boxes = [...document.querySelectorAll('div,section,dialog')].filter(el => {
-    if (el.offsetParent === null) return false;
-    if (el.clientHeight < 80 || el.clientWidth < 200) return false;
-    const c = (el.className || '').toString();
-    const t = el.innerText || '';
-    return (/dialog|modal|popup|layer/i.test(c) || /일괄변경 하시겠|변경항목/.test(t))
-           && /변경항목|일괄변경 하시겠/.test(t);
-  });
-  if (!boxes.length) return JSON.stringify({ ok: false, reason: '확인창을 못 찾음' });
-  boxes.sort((a, b) => (a.clientHeight * a.clientWidth) - (b.clientHeight * b.clientWidth));
-  const box = boxes[0];
-  const text = (box.innerText || '').trim();
-  const tables = [];
-  for (const t of box.querySelectorAll('table')) {
-    for (const r of t.rows) tables.push([...r.cells].map(c => (c.innerText || '').trim()));
-  }
-  const btns = [];
-  for (const el of box.querySelectorAll('button,[class*=btn],[class*=Btn],[role=button]')) {
-    if (el.offsetParent === null) continue;
-    const t = (el.innerText || el.value || '').trim();
-    if (t && t.length <= 20 && !btns.includes(t)) btns.push(t);
-  }
-  return JSON.stringify({ ok: true, text: text.slice(0, 900), table: tables.slice(0, 12), buttons: btns });
 }"""
 
 lines = []
@@ -202,20 +251,30 @@ def 저장():
     OUT.write_text("\n".join(lines), encoding="utf-8")
 
 
-def 누르기(page, 글자, 위치="아래"):
-    """글자가 정확히 일치하는 것을 찾아 누른다. 여러 개면 아래쪽/오른쪽 것을 고른다."""
+def 누르기(page, 글자):
     found = json.loads(page.evaluate(FIND, {"text": 글자}))
     if not found:
-        return None, f"'{글자}' 를 화면에서 못 찾음"
-    if 위치 == "아래":
-        found.sort(key=lambda e: (e["y"], e["x"]))
-        target = found[-1]
-    else:
-        found.sort(key=lambda e: (e["y"], e["x"]))
-        target = found[0]
-    page.mouse.click(target["x"], target["y"])
-    page.wait_for_timeout(700)
-    return target, ""
+        return None
+    found.sort(key=lambda e: (e["y"], e["x"]))
+    t = found[-1]
+    page.mouse.click(t["x"], t["y"])
+    page.wait_for_timeout(900)
+    return t
+
+
+def 창읽기(page, 제목):
+    d = json.loads(page.evaluate(POPUP))
+    say("")
+    say(f"===== {제목} =====")
+    for t in d["안내"]:
+        say("  글: " + t)
+    for row in d["표"]:
+        say("  표: " + " | ".join(row))
+    if d["라디오"]:
+        say("  사유: " + ", ".join(
+            f"[{'O' if r['골라짐'] else ' '}]{r['글자']}" for r in d["라디오"]))
+    say("  단추: " + ", ".join(d["단추"]) if d["단추"] else "  단추: 없음")
+    return d
 
 
 print()
@@ -249,11 +308,10 @@ try:
         if not pages:
             say("smarta.wehago.com 탭을 찾지 못했습니다.")
             raise SystemExit
-        # 위하고 탭이 여러 개 열려 있을 수 있다. 전자세금계산서 화면을 먼저 본다.
         pages.sort(key=lambda pg: "SAAC0103" not in pg.url)
         say(f"위하고 탭 {len(pages)}개를 봅니다.")
 
-        page, rows, data = None, None, None
+        page, rows = None, None
         for pg in pages:
             꼬리 = pg.url.split("/#/")[-1][:60]
             try:
@@ -262,22 +320,17 @@ try:
                 say(f"  탭 {꼬리} : 읽기 실패 {str(e)[:80]}")
                 continue
             if d.get("ok") and d.get("rows"):
-                page, rows, data = pg, d["rows"], d
+                page, rows = pg, d["rows"]
                 say(f"  탭 {꼬리} : 전표 {len(rows)}건")
                 break
-            say(f"  탭 {꼬리} : {d.get('reason') or '자료 없음'}"
-                + (f" (그리드 {len(d.get('후보', []))}개 건수 "
-                   + ",".join(str(c['건수']) for c in d.get('후보', [])) + ")"
-                   if d.get('후보') else ""))
+            say(f"  탭 {꼬리} : {d.get('reason') or '자료 없음'}")
         if page is None:
             say("")
             say("자료가 들어 있는 전자세금계산서 탭을 찾지 못했습니다.")
             say("전자세금계산서 화면에서 조회를 한 번 더 누른 뒤 다시 실행해주세요.")
             raise SystemExit
         page.bring_to_front()
-        say(f"전표 {len(rows)}건을 읽었습니다.")
 
-        # 사유별로 바꿀 줄과 본보기 줄을 나눈다
         대상 = collections.defaultdict(list)
         본보기 = collections.defaultdict(list)
         for i, r in enumerate(rows):
@@ -292,15 +345,13 @@ try:
 
         say("")
         say(f"불공으로 바꿀 건 {sum(len(v) for v in 대상.values())}건")
-        for code in sorted(사유이름):
-            say(f"  사유 {code} {사유이름[code]}: 바꿀 줄 {len(대상.get(code, []))}건"
-                f" / 본보기로 쓸 수 있는 줄 {len(본보기.get(code, []))}건")
+        for c in sorted(사유이름):
+            say(f"  사유 {c} {사유이름[c]}: 바꿀 줄 {len(대상.get(c, []))}건"
+                f" / 본보기로 쓸 수 있는 줄 {len(본보기.get(c, []))}건")
         if not 대상:
             say("바꿀 건이 없습니다.")
             raise SystemExit
 
-        say("")
-        say("일괄변경은 본보기가 하나뿐이라 사유를 하나씩만 바꿉니다.")
         code = input("\n  이번에 처리할 사유 (3/4/5) >>> ").strip()
         if code not in 대상 or not 대상[code]:
             print(f"  사유 {code} 로 바꿀 줄이 없습니다.")
@@ -317,7 +368,6 @@ try:
         say("")
         say(f"본보기 줄: {tmpl + 1}번째  {t.get('s_date')}  {t.get('nm_trade')}"
             f"  유형 {t.get('ty_mth2')}  사유 {t.get('cd_notdedct')}")
-        say("")
         say(f"바꿀 줄 {len(대상[code])}건:")
         for i in 대상[code][:40]:
             r = rows[i]
@@ -327,105 +377,116 @@ try:
             say(f"  ... 그 밖에 {len(대상[code]) - 40}건")
 
         print()
-        print("  먼저 1건만 해보고 화면을 확인한 뒤 나머지를 하시겠습니까?")
-        시험 = input("  1건만 먼저 (y/n, 처음이면 y) >>> ").strip().lower() != "n"
+        시험 = input("  먼저 1건만 해볼까요? (y/n, 처음이면 y) >>> ").strip().lower() != "n"
         묶음 = 대상[code][:1] if 시험 else 대상[code]
 
-        # 1 본보기 줄을 현재 줄로
-        res = json.loads(page.evaluate(SET_CURRENT,
-                                       {"row": tmpl, "want_ty": 불공, "want_cd": code}))
-        if not res.get("ok"):
-            say(f"본보기 줄 지정 실패: {res.get('reason')}")
-            raise SystemExit
-        say("")
-        say(f"본보기 줄을 현재 줄로 두었습니다: {res.get('거래처')}")
-
-        # 2 바꿀 줄 체크
+        # 1 바꿀 줄 체크 (사람이 하는 차례대로 체크가 먼저다)
         res = json.loads(page.evaluate(CHECK_ROWS, {"rows": 묶음}))
+        say("")
         for line in res.get("log", []):
             say("  " + line)
-        if not res.get("ok"):
-            say(f"체크 실패: {res.get('reason')}")
+        화면수 = page.evaluate(SELECTED_TEXT)
+        say(f"  화면의 선택됨 글자: {화면수 or '못 읽음'}건")
+        센것 = [n for n in (res.get("센수"), res.get("하나씩")) if n is not None and n >= 0]
+        if 화면수.isdigit():
+            센것.append(int(화면수))
+        if not 센것 or max(센것) != len(묶음):
+            say(f"  [멈춤] {len(묶음)}줄을 체크하려 했는데 센 값이 {센것} 입니다.")
+            say("  체크가 제대로 안 들어갔습니다. 진행하지 않습니다.")
             raise SystemExit
+        say(f"  {len(묶음)}줄 체크 확인")
+
+        # 2 본보기 줄의 유형 칸을 잡는다. 이것이 '유형을 바꾸겠다' 는 뜻이 된다.
+        res = json.loads(page.evaluate(SET_TYPE_CELL,
+                                       {"row": tmpl, "want_ty": 불공, "want_cd": code}))
+        if not res.get("ok"):
+            say(f"본보기 줄의 유형 칸을 못 잡았습니다: {res.get('reason')}")
+            raise SystemExit
+        say(f"  본보기 줄 {res.get('거래처')} 의 유형 칸을 잡았습니다 (잡은 칸: {res.get('잡은칸')})")
 
         첫줄 = rows[묶음[0]]
         print()
         print("  " + "-" * 66)
-        print("   화면에서 두 가지를 확인해주세요. 둘은 역할이 다릅니다.")
+        print("   화면에서 세 가지를 확인해주세요.")
         print()
         print(f"   1) 본보기 줄  {tmpl + 1}번째  {t.get('s_date')} {t.get('nm_trade')}")
-        print(f"      -> 파란색으로 '선택' 되어 있어야 합니다. 체크는 아닙니다.")
-        print(f"      -> 이 줄의 불공 + 사유 {code} 를 그대로 베낍니다.")
-        print()
-        print(f"   2) 바꿀 줄  {len(묶음)}건  (첫 줄: {묶음[0] + 1}번째"
-              f" {첫줄.get('s_date')} {첫줄.get('nm_trade')})")
-        print(f"      -> 체크표시가 들어가 있어야 합니다. 이 줄들이 불공으로 바뀝니다.")
+        print(f"      -> 그 줄의 '유형' 칸(불공)이 파란 테두리로 잡혀 있어야 합니다.")
+        print(f"   2) 바꿀 줄 {len(묶음)}건 (첫 줄: {묶음[0] + 1}번째 {첫줄.get('nm_trade')})")
+        print(f"      -> 체크표시가 들어가 있어야 합니다.")
+        print(f"   3) 화면 왼쪽 아래에 '{len(묶음)}건 선택됨' 이 보여야 합니다.")
         print("  " + "-" * 66)
         if input("\n  이대로 맞으면 y, 아니면 Enter >>> ").strip().lower() != "y":
             say("사용자가 중단했습니다. 값은 바꾸지 않았습니다.")
             raise SystemExit
 
         # 3 일괄변경 > 전체일괄변경
-        btn, err = 누르기(page, "일괄변경", "아래")
-        if err:
-            say(err)
-            say("오른쪽 아래 일괄변경 단추를 못 찾았습니다. 손으로 눌러주세요.")
+        if not 누르기(page, "일괄변경"):
+            say("오른쪽 아래 '일괄변경' 을 못 찾았습니다.")
             raise SystemExit
-        say(f"일괄변경 누름 ({btn['x']},{btn['y']})")
-
-        btn, err = 누르기(page, "전체일괄변경", "아래")
-        if err:
-            say(err)
-            say("전체일괄변경 항목을 못 찾았습니다.")
+        say("'일괄변경' 누름")
+        if not 누르기(page, "전체일괄변경"):
+            say("'전체일괄변경' 을 못 찾았습니다.")
             raise SystemExit
-        say(f"전체일괄변경 누름 ({btn['x']},{btn['y']})")
+        say("'전체일괄변경' 누름")
 
-        # 4 확인창 대조
-        dlg = json.loads(page.evaluate(DIALOG))
-        if not dlg.get("ok"):
-            say(f"확인창을 못 읽었습니다: {dlg.get('reason')}")
-            say("화면을 보시고 아니면 닫기를 눌러주세요.")
-            raise SystemExit
-        say("")
-        say("===== 확인창 =====")
-        for row in dlg["table"]:
-            say("  " + " | ".join(row))
-        say("  단추: " + ", ".join(dlg["buttons"]))
-
-        본문 = dlg["text"] + " " + " ".join(" ".join(r) for r in dlg["table"])
-        숫자 = [int(n) for n in re.findall(r"\b(\d+)\b", " ".join(" ".join(r) for r in dlg["table"]))]
-        문제 = []
-        if "불공" not in 본문:
-            문제.append("확인창에 '불공' 이라는 말이 없습니다")
-        if 숫자 and len(묶음) not in 숫자:
-            문제.append(f"확인창의 건수 {숫자} 가 체크한 {len(묶음)}건과 다릅니다")
-        if 문제:
+        d = 창읽기(page, "전체일괄변경을 누른 뒤")
+        글전체 = " ".join(d["안내"])
+        if "대상이 없습니다" in 글전체 or "선택후" in 글전체:
             say("")
-            for m in 문제:
-                say(f"  [멈춤] {m}")
-            say("  바꾸지 않고 멈춥니다. 화면의 닫기를 눌러주세요.")
-            raise SystemExit
-        say(f"  확인창 내용이 체크한 {len(묶음)}건과 맞습니다.")
-
-        print()
-        if input("\n  확인을 눌러 실제로 바꿀까요? (y) >>> ").strip().lower() != "y":
-            say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
+            say("  [멈춤] 위하고가 바꿀 대상을 못 알아봤습니다.")
+            say("  화면의 확인을 눌러 닫아주세요. 아무것도 바뀌지 않았습니다.")
             raise SystemExit
 
-        ok = False
-        for 글자 in ("확인(Enter)", "확인(enter)", "확인"):
-            btn, err = 누르기(page, 글자, "아래")
-            if not err:
-                say(f"'{글자}' 누름")
-                ok = True
-                break
-        if not ok:
-            say("확인 단추를 못 찾았습니다. 손으로 눌러주세요.")
-            raise SystemExit
+        # 4 사유 창이면 골라진 사유를 대조한다
+        if d["라디오"]:
+            골라진 = [r for r in d["라디오"] if r["골라짐"]]
+            if len(골라진) != 1:
+                say(f"  [멈춤] 골라진 사유가 {len(골라진)}개입니다. 확인하지 않습니다.")
+                say("  화면의 닫기를 눌러주세요.")
+                raise SystemExit
+            if 골라진[0]["코드"] != code:
+                say(f"  [멈춤] 사유 {code} 를 바랐는데 {골라진[0]['글자']} 가 골라져 있습니다.")
+                say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
+                raise SystemExit
+            say(f"  사유 {골라진[0]['글자']} 가 이미 골라져 있습니다. 바라던 것과 같습니다.")
+
+            if input("\n  이 사유로 확인할까요? (y) >>> ").strip().lower() != "y":
+                say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
+                raise SystemExit
+            눌렀나 = False
+            for 글자 in ("선택(enter)", "선택(Enter)", "확인(Enter)", "확인(enter)", "선택", "확인"):
+                if 누르기(page, 글자):
+                    say(f"  '{글자}' 누름")
+                    눌렀나 = True
+                    break
+            if not 눌렀나:
+                say("  확인 단추를 못 찾았습니다. 손으로 눌러주세요.")
+                raise SystemExit
+            d = 창읽기(page, "사유를 고른 뒤")
+
+        # 5 마무리 확인창이 있으면 건수를 대조한다
+        if d["표"] or "일괄변경 하시겠" in " ".join(d["안내"]):
+            숫자 = [int(n) for row in d["표"] for c in row for n in re.findall(r"\b(\d+)\b", c)]
+            if 숫자 and len(묶음) not in 숫자:
+                say(f"  [멈춤] 확인창의 숫자 {숫자} 가 체크한 {len(묶음)}건과 다릅니다.")
+                say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
+                raise SystemExit
+            if input("\n  확인을 눌러 실제로 바꿀까요? (y) >>> ").strip().lower() != "y":
+                say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
+                raise SystemExit
+            눌렀나 = False
+            for 글자 in ("확인(Enter)", "확인(enter)", "확인"):
+                if 누르기(page, 글자):
+                    say(f"  '{글자}' 누름")
+                    눌렀나 = True
+                    break
+            if not 눌렀나:
+                say("  확인 단추를 못 찾았습니다. 손으로 눌러주세요.")
+                raise SystemExit
 
         page.wait_for_timeout(1500)
 
-        # 5 결과 대조
+        # 6 결과 대조
         after = json.loads(page.evaluate(GRAB))
         if not after.get("ok"):
             say("바꾼 뒤 목록을 다시 읽지 못했습니다. 화면을 확인해주세요.")
@@ -450,7 +511,8 @@ try:
         say("===== 결과 =====")
         say(f"  바뀐 줄 {성공} / {len(묶음)}")
         for i, why in 실패[:20]:
-            say(f"  안 바뀜 {i + 1}번째 {arows[i].get('nm_trade') if i < len(arows) else ''} : {why}")
+            이름 = arows[i].get("nm_trade") if i < len(arows) else ""
+            say(f"  안 바뀜 {i + 1}번째 {이름} : {why}")
         if 실패:
             say("")
             say("  하나라도 어긋나면 나머지는 진행하지 않습니다.")
