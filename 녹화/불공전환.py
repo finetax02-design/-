@@ -174,6 +174,44 @@ CHECKED = r"""(args) => {
   return JSON.stringify({ value: '', text: '(선택 없음)', matches: false });
 }"""
 
+# 자바스크립트로 라디오를 직접 누른다.
+# 라벨에 visibility:hidden 이 걸려 있어 마우스 클릭이 안 먹으므로
+# 요소에 직접 신호를 보낸다. 반드시 화면에 보이는 쪽(rect 이 0 이 아닌 것)에 해야 한다.
+JS_PICK = r"""(args) => {
+  const el = document.querySelector('input[data-auto-pick="input"]');
+  if (!el) return '표시된 라디오가 없음';
+  const L = [];
+  const 방법 = String(args.how);
+
+  if (방법 === 'click') {
+    try { el.click(); L.push('el.click()'); } catch (e) { L.push('오류: ' + String(e).slice(0, 80)); }
+  } else if (방법 === 'setter') {
+    try {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked').set;
+      setter.call(el, true);
+      L.push('checked 설정');
+    } catch (e) { L.push('setter 오류: ' + String(e).slice(0, 80)); }
+    for (const t of ['click', 'input', 'change']) {
+      try { el.dispatchEvent(new Event(t, { bubbles: true })); L.push(t); } catch (e) {}
+    }
+  } else if (방법 === 'mouse') {
+    // 라벨 안의 아이콘에 진짜 마우스 이벤트 순서를 보낸다
+    const lab = document.querySelector('[data-auto-pick="label"]');
+    const t = (lab && lab.querySelector('span,svg')) || lab || el;
+    const r = t.getBoundingClientRect();
+    const opt = { bubbles: true, cancelable: true, view: window,
+                  clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      try {
+        const E = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+        t.dispatchEvent(new E(type, opt));
+        L.push(type);
+      } catch (e) { L.push(type + ' 오류'); }
+    }
+  }
+  return L.join(' / ');
+}"""
+
 REVERT = r"""(args) => {
   const g = window.__g;
   try { g.setCurrent({ itemIndex: args.row, dataRow: args.row,
@@ -279,11 +317,13 @@ try:
                 print(f"      {page.evaluate(REVERT, {'row': t['row']})}")
                 return False, before, json.loads(page.evaluate(STATE, {"row": t["row"]}))
 
-            # 라벨은 tabindex=0 인 초점 요소다. 좌표만 찍는 것으로는 부족해
-            # Playwright 가 요소를 직접 다루게 하고, 안 되면 키보드로 누른다.
+            # 라벨에 visibility:hidden 이 걸려 있어 마우스 클릭이 안 먹는다.
+            # Enter 는 쓰지 않는다. 팝업을 닫고 조회까지 다시 돌려 화면을 망가뜨린다.
             def 시도(이름, fn):
                 try:
-                    fn()
+                    r = fn()
+                    if isinstance(r, str):
+                        print(f"      {이름}: {r}")
                 except Exception as exc:
                     print(f"      {이름} 실패: {str(exc)[:90]}")
                     return False
@@ -293,10 +333,10 @@ try:
                 return bool(c.get("matches"))
 
             lab = page.locator('[data-auto-pick="label"]')
-            got = (시도("라벨 클릭", lambda: lab.click(timeout=4000))
-                   or 시도("초점+Space", lambda: (lab.focus(), page.keyboard.press("Space")))
-                   or 시도("초점+Enter", lambda: (lab.focus(), page.keyboard.press("Enter")))
-                   or 시도("강제 클릭", lambda: lab.click(timeout=4000, force=True)))
+            got = (시도("JS 클릭", lambda: page.evaluate(JS_PICK, {"how": "click"}))
+                   or 시도("JS 신호", lambda: page.evaluate(JS_PICK, {"how": "setter"}))
+                   or 시도("JS 마우스", lambda: page.evaluate(JS_PICK, {"how": "mouse"}))
+                   or 시도("라벨 클릭", lambda: lab.click(timeout=3000, force=True)))
             if not got:
                 print(f"      원하는 사유({t['code']})가 선택되지 않았습니다. 확정하지 않습니다.")
                 page.keyboard.press("Escape")
