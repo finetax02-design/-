@@ -207,39 +207,54 @@ try:
             say(f"  {c['자리']:>3} {c['이름']:<14} 고칠수있음={c['고칠수있음']}"
                 f" 보임={c['보임']} 머리={c['머리']}")
 
-        # 이미 불공인데 사유가 규칙과 다른 줄을 찾는다. 고치면 이로운 줄이다.
-        어긋난 = []
+        # 불공인 줄을 모두 보여준다. 규칙과 어긋나는 것은 표시해 둔다.
+        불공줄 = []
         for i, r in enumerate(rows):
             if str(r.get("ty_mth2")) != 불공:
                 continue
             바람 = rules.get(str(r.get("no_bisocial") or ""))
             지금 = str(r.get("cd_notdedct") or "")
-            if 바람 and 지금 != 바람:
-                어긋난.append((i, 지금, 바람))
+            불공줄.append((i, 지금, 바람))
 
         say("")
-        if not 어긋난:
-            say("사유가 규칙과 어긋나는 불공 줄이 없습니다.")
-            say("시험할 줄이 없으니 여기서 멈춥니다.")
+        if not 불공줄:
+            say("불공인 줄이 하나도 없습니다. 고칠 것이 없습니다.")
             raise SystemExit
-        say(f"이미 불공인데 사유가 규칙과 다른 줄 {len(어긋난)}건:")
-        for n, (i, 지금, 바람) in enumerate(어긋난[:20], 1):
+        say(f"불공인 줄 {len(불공줄)}건:")
+        for n, (i, 지금, 바람) in enumerate(불공줄[:30], 1):
             r = rows[i]
+            표 = ""
+            if 바람 and 지금 != 바람:
+                표 = f"   <- 규칙은 {바람} 인데 어긋남"
+            elif 바람:
+                표 = "   (규칙과 같음)"
             say(f"  {n:>2}) {i + 1:>4}번째  {r.get('s_date')}  {r.get('nm_trade')}"
-                f"  {r.get('mn_mnam')}   사유 {지금 or '없음'} -> {바람}")
+                f"  {r.get('mn_mnam')}   사유 {지금 or '없음'}{표}")
+        if len(불공줄) > 30:
+            say(f"  ... 그 밖에 {len(불공줄) - 30}건")
 
-        골 = input("\n  시험할 줄 번호 (1 부터, 그만두려면 Enter) >>> ").strip()
-        if not 골.isdigit() or not (1 <= int(골) <= len(어긋난)):
+        골 = input("\n  고칠 줄 번호 (1 부터, 그만두려면 Enter) >>> ").strip()
+        if not 골.isdigit() or not (1 <= int(골) <= len(불공줄)):
             say("그만둡니다. 아무것도 바꾸지 않았습니다.")
             raise SystemExit
-        i, 지금, 바람 = 어긋난[int(골) - 1]
+        i, 지금, 바람 = 불공줄[int(골) - 1]
         r = rows[i]
+
+        기본 = 바람 or ""
+        묻기 = f"  넣을 사유 (3/4/5" + (f", 그냥 Enter 면 {기본}" if 기본 else "") + ") >>> "
+        새사유 = input("\n" + 묻기).strip() or 기본
+        if 새사유 not in 사유이름:
+            say(f"사유 {새사유} 는 다루지 않습니다. 3, 4, 5 만 됩니다.")
+            raise SystemExit
+        바람 = 새사유
 
         say("")
         say(f"바꿀 줄: {i + 1}번째  {r.get('s_date')}  {r.get('nm_trade')}"
             f"  {r.get('mn_mnam')}")
         say(f"사유를 {지금 or '없음'} 에서 {바람} {사유이름[바람]} 로 바꿉니다.")
         say("유형(불공)은 건드리지 않습니다.")
+        if 지금 == 바람:
+            say("[알림] 지금 사유와 같습니다. 아무것도 안 바뀔 것입니다.")
         if input("\n  이 한 줄만 바꿔볼까요? (y) >>> ").strip().lower() != "y":
             say("그만둡니다. 아무것도 바꾸지 않았습니다.")
             raise SystemExit

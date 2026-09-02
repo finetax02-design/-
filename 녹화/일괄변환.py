@@ -269,6 +269,40 @@ POPUP = r"""() => {
                           라디오: 라디오, 상자: 상자.slice(0, 10) });
 }"""
 
+# 사유를 창 없이 직접 넣고 위하고가 알아듣게 한다.
+# 사유 창의 라디오는 어떤 방법으로도 안 움직인다. 여섯 가지를 다 시험했다.
+# 계정과목 때 통했던 길을 쓴다. setValue 뒤에 onCellEdited 를 직접 부른다.
+SET_REASON = r"""(args) => {
+  const g = window.__g;
+  if (!g) return JSON.stringify({ ok: false, reason: '그리드 없음' });
+  let src = g;
+  try { const dp = g.getDataSource(); if (dp) src = dp; } catch (e) {}
+  const 읽기 = () => { try { return src.getJsonRows(args.row, args.row)[0] || null; }
+                       catch (e) { return null; } };
+  const 앞 = 읽기();
+  if (!앞) return JSON.stringify({ ok: false, reason: '줄을 못 읽음' });
+  if (String(앞.nm_trade || '') !== args.거래처) {
+    return JSON.stringify({ ok: false, reason: `줄이 밀렸습니다 (${앞.nm_trade})` });
+  }
+  if (String(앞.cd_notdedct || '') === args.사유) {
+    return JSON.stringify({ ok: true, 그대로: true, 사유: 앞.cd_notdedct });
+  }
+  let 열자리 = -1;
+  try {
+    g.getColumns().forEach((c, i) => {
+      if (String(c.name || c.fieldName || '') === 'cd_notdedct') 열자리 = i;
+    });
+  } catch (e) {}
+  try { g.setValue(args.row, 'cd_notdedct', args.사유); }
+  catch (e) { return JSON.stringify({ ok: false, reason: 'setValue ' + String(e).slice(0, 90) }); }
+  try { if (typeof g.onCellEdited === 'function') g.onCellEdited(g, args.row, args.row, 열자리); }
+  catch (e) { return JSON.stringify({ ok: false, reason: 'onCellEdited ' + String(e).slice(0, 90) }); }
+  const 뒤 = 읽기();
+  return JSON.stringify({ ok: true, 열자리: 열자리,
+    앞사유: 앞.cd_notdedct, 뒤사유: 뒤 && 뒤.cd_notdedct,
+    유형: 뒤 && 뒤.ty_mth2, 상태: 뒤 && 뒤.ty_jungstat });
+}"""
+
 # 글자가 정확히 같은 것을 찾아 누른다
 FIND = r"""(args) => {
   const out = [];
@@ -363,60 +397,24 @@ def 창읽기(page, 제목, 기다림초=8):
     return d
 
 
-def 라디오누르기(page, d, code):
-    """사유 하나를 진짜 마우스로 누르고, 실제로 옮겨졌는지 다시 읽어 돌려준다."""
-    표적 = next((r for r in d["라디오"] if r["코드"] == code), None)
-    if not 표적:
-        return None, d
-    page.mouse.click(표적["x"], 표적["y"])
-    page.wait_for_timeout(500)
-    d2 = json.loads(page.evaluate(POPUP))
-    골라진 = [r for r in d2["라디오"] if r["골라짐"]]
-    return (골라진[0]["코드"] if len(골라진) == 1 else None), d2
-
-
 def 사유창(page, d, code):
-    """사유 창이면 사유를 제대로 옮기고 확인한다. 진행해도 되면 True.
+    """사유 창은 그대로 확인만 한다. 사유는 나중에 칸에 직접 넣는다.
 
-    창에는 바라던 사유가 이미 골라진 것처럼 보인다. 그런데 위하고가
-    실제로 쓰는 값은 따로 있고 거기엔 4 가 남아 있다. 이미 표시가 있는
-    자리를 눌러봐야 '바뀜' 이 일어나지 않아 전달되지 않는다.
-    그래서 다른 사유를 한 번 거쳐 갔다가 바라던 사유로 돌아온다.
-    두 번 다 '바뀜' 이 일어나므로 위하고가 알아듣는다.
+    이 창의 라디오는 어떤 방법으로도 움직이지 않는다.
+    라벨 좌표, 입력칸 좌표, label.click, input.click,
+    네이티브 setter + change, 리액트 onChange 를 다 시험했으나 하나도 안 통했다.
+    name 조차 없어 여러 개가 동시에 체크되는 물건이다.
+
+    그래서 여기서는 유형(불공)만 얻고 나간다.
+    사유가 4 로 들어가더라도 뒤에서 칸에 직접 넣어 바로잡는다.
     """
     if not d["라디오"]:
         return True
-    있는코드 = {r["코드"] for r in d["라디오"]}
-    if code not in 있는코드:
-        say(f"  [멈춤] 사유 {code} 가 창에 없습니다. 있는 것: {sorted(있는코드)}")
-        say("  화면의 취소(esc) 단추를 눌러주세요.")
-        return False
-
-    딴것 = next((c for c in ("4", "3", "0", "1", "2") if c in 있는코드 and c != code), None)
-    if 딴것 is None:
-        say("  [멈춤] 거쳐 갈 다른 사유가 없습니다.")
-        say("  화면의 취소(esc) 단추를 눌러주세요.")
-        return False
-
-    처음 = [r["코드"] for r in d["라디오"] if r["골라짐"]]
-    say(f"  창이 뜰 때 표시된 사유: {처음 or '없음'}")
-
-    골라진, d = 라디오누르기(page, d, 딴것)
-    say(f"  거쳐 가려고 사유 {딴것} 를 눌렀더니 → {골라진 or '읽지 못함'}")
-    if 골라진 != 딴것:
-        say("  [멈춤] 사유를 눌러도 옮겨지지 않습니다.")
-        say("  화면의 취소(esc) 단추를 눌러 닫아주세요. 사유가 잘못 들어가면 안 됩니다.")
-        return False
-
-    골라진, d = 라디오누르기(page, d, code)
-    say(f"  바라던 사유 {code} 를 눌렀더니 → {골라진 or '읽지 못함'}")
-    if 골라진 != code:
-        say(f"  [멈춤] 사유 {code} 로 옮기지 못했습니다.")
-        say("  화면의 취소(esc) 단추를 눌러 닫아주세요.")
-        return False
-
-    say(f"  사유 {code} {사유이름.get(code, '')} 로 제대로 옮겼습니다.")
-    if input("\n  이 사유로 확인할까요? (y) >>> ").strip().lower() != "y":
+    보임 = [r["코드"] for r in d["라디오"] if r["골라짐"]]
+    say(f"  사유 창이 떴습니다. 표시된 사유: {보임 or '없음'}")
+    say("  이 창의 라디오는 움직이지 않으므로 그대로 확인합니다.")
+    say(f"  사유는 창을 나온 뒤 {code} {사유이름.get(code, '')} 로 직접 넣습니다.")
+    if input("\n  확인을 눌러 유형만 먼저 바꿀까요? (y) >>> ").strip().lower() != "y":
         say("사용자가 중단했습니다. 화면의 취소(esc) 를 눌러주세요.")
         return False
     for 글자 in ("선택(enter)", "선택(Enter)", "확인(Enter)", "확인(enter)", "선택", "확인"):
@@ -659,12 +657,60 @@ try:
 
         page.wait_for_timeout(1500)
 
-        # 6 결과 대조
+        # 6 유형이 바뀌었는지 먼저 본다
         after = json.loads(page.evaluate(GRAB))
         if not after.get("ok"):
             say("바꾼 뒤 목록을 다시 읽지 못했습니다. 화면을 확인해주세요.")
             raise SystemExit
         arows = after["rows"]
+        유형된 = []
+        say("")
+        say("===== 유형이 바뀌었는지 =====")
+        for i in 묶음:
+            if i >= len(arows) or str(arows[i].get("nm_trade") or "") != str(rows[i].get("nm_trade") or ""):
+                say(f"  {i + 1}번째 줄이 밀렸습니다. 여기서 멈춥니다.")
+                raise SystemExit
+            if str(arows[i].get("ty_mth2") or "") == 불공:
+                유형된.append(i)
+        say(f"  불공으로 바뀐 줄 {len(유형된)} / {len(묶음)}")
+        if len(유형된) != len(묶음):
+            say("  유형이 다 안 바뀌었습니다. 사유는 건드리지 않고 멈춥니다.")
+            raise SystemExit
+
+        # 7 사유를 칸에 직접 넣는다. 창을 거치지 않는다.
+        고칠것 = [i for i in 유형된 if str(arows[i].get("cd_notdedct") or "") != code]
+        say("")
+        say("===== 사유 넣기 =====")
+        if not 고칠것:
+            say(f"  이미 다 사유 {code} 입니다. 손댈 것이 없습니다.")
+        else:
+            say(f"  사유를 {code} {사유이름[code]} 로 넣을 줄 {len(고칠것)}건")
+            for i in 고칠것[:10]:
+                say(f"    {i + 1:>4}번째 {arows[i].get('nm_trade')}"
+                    f"  지금 사유 {arows[i].get('cd_notdedct') or '없음'}")
+            if len(고칠것) > 10:
+                say(f"    ... 그 밖에 {len(고칠것) - 10}건")
+            if input("\n  사유를 넣을까요? (y) >>> ").strip().lower() != "y":
+                say("사용자가 중단했습니다. 유형만 바뀐 채로 남습니다.")
+                raise SystemExit
+            for i in 고칠것:
+                res = json.loads(page.evaluate(SET_REASON,
+                                               {"row": i, "사유": code,
+                                                "거래처": str(arows[i].get("nm_trade") or "")}))
+                if not res.get("ok"):
+                    say(f"  {i + 1}번째 실패: {res.get('reason')}")
+                    say("  하나라도 실패하면 나머지는 하지 않습니다.")
+                    break
+                if res.get("그대로"):
+                    continue
+                say(f"  {i + 1}번째 {arows[i].get('nm_trade')}"
+                    f"  사유 {res.get('앞사유') or '없음'} -> {res.get('뒤사유')}"
+                    f"  (열자리 {res.get('열자리')}, 전표상태 {res.get('상태')})")
+            page.wait_for_timeout(1200)
+
+        # 8 마지막으로 다시 읽어 대조
+        after = json.loads(page.evaluate(GRAB))
+        arows = after.get("rows") or arows
         성공, 실패 = 0, []
         for i in 묶음:
             if i >= len(arows):
@@ -694,6 +740,7 @@ try:
             say(f"  1건이 제대로 바뀌었습니다. 다시 실행해서 n 을 고르면"
                 f" 남은 {len(대상[code]) - 1}건을 한 번에 바꿉니다.")
         say("")
+        say("  화면에서 불공사유가 제대로 들어갔는지 눈으로도 봐주세요.")
         say("  전송(F3)은 부르지 않았습니다. 전송은 눈으로 확인하고 직접 하세요.")
 
 except SystemExit:
