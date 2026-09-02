@@ -106,6 +106,26 @@ CHECK_ROWS = r"""(args) => {
   return JSON.stringify({ log: L, checked: after.slice(0, 60) });
 }"""
 
+# 화면에 보이는 버튼과 메뉴를 모두 훑는다. 일괄변경 입구를 찾기 위함이다.
+BUTTONS = r"""() => {
+  const L = [];
+  const seen = new Set();
+  const els = document.querySelectorAll(
+    'button, a, [role=button], [role=menuitem], [class*=btn], [class*=Btn], [class*=menu]');
+  for (const el of els) {
+    if (el.offsetParent === null) continue;
+    const t = (el.innerText || el.value || el.title || '').trim().replace(/\s+/g, ' ');
+    if (!t || t.length > 24) continue;
+    const key = t + '|' + (el.className || '').toString().slice(0, 30);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const r = el.getBoundingClientRect();
+    L.push(`  "${t}"  <${el.tagName.toLowerCase()} class="${(el.className||'').toString().slice(0,44)}">`
+           + `  (${Math.round(r.x)},${Math.round(r.y)})`);
+  }
+  return `화면의 버튼 ${L.length}개\n` + L.slice(0, 90).join('\n');
+}"""
+
 # 일괄변경 화면이 열리면 그 구조를 기록한다
 DUMP = r"""() => {
   const L = [];
@@ -231,20 +251,31 @@ try:
             say("  " + line)
         say(f"  체크된 줄 번호(앞 60개): {res['checked']}")
 
+        say("")
+        say("===== 화면의 버튼 (일괄변경 입구 찾기) =====")
+        say(page.evaluate(BUTTONS))
+
         print()
         print("  " + "-" * 62)
         print("   화면을 봐주세요. 대상 줄에 체크 표시가 들어갔나요?")
         print()
-        print("   들어갔으면, 위하고의 일괄변경 기능을 열어주세요.")
-        print("   (유형을 불공으로 바꾸고 사유를 고르는 그 화면입니다)")
-        print("   열기만 하시고 적용은 누르지 마세요.")
+        print("   들어갔으면 일괄변경을 열어주세요.")
+        print("   [중요] 마지막 '일괄변경 하시겠습니까?' 확인창 말고,")
+        print("          그 앞의 '무엇을 무엇으로 바꿀지 고르는 화면' 에서")
+        print("          멈춰주세요. 유형이나 불공사유를 고르는 그 단계입니다.")
         print("  " + "-" * 62)
         print()
-        input("  일괄변경 화면을 여셨으면 Enter >>> ")
+        input("  변경항목을 고르는 화면에서 Enter >>> ")
 
         say("")
-        say("===== 일괄변경 화면 구조 =====")
+        say("===== 변경항목 선택 화면 =====")
         say(page.evaluate(DUMP))
+
+        print()
+        if input("  다음 단계로 넘어가셨으면 y (아니면 Enter) >>> ").strip().lower() == "y":
+            say("")
+            say("===== 다음 단계 화면 =====")
+            say(page.evaluate(DUMP))
 
         browser.close()
 except SystemExit:
