@@ -246,7 +246,7 @@ POPUP = r"""() => {
     if (!안내.includes(t)) 안내.push(t.slice(0, 300));
   }
 
-  return JSON.stringify({ 안내: 안내.slice(0, 6), 표: 표, 단추: 단추.slice(0, 30),
+  return JSON.stringify({ 안내: 안내.slice(0, 6), 표: 표, 단추: 단추.slice(0, 60),
                           라디오: 라디오, 상자: 상자.slice(0, 10) });
 }"""
 
@@ -294,10 +294,43 @@ def 누르기(page, 글자):
     return t
 
 
-def 창읽기(page, 제목):
+def 창글자(d):
+    """창에 적힌 글자를 표까지 싹 모은다"""
+    조각 = list(d["안내"])
+    for tb in d["표"]:
+        for row in tb["줄"]:
+            조각 += row
+    return " ".join(조각)
+
+
+def 채워졌나(d):
+    """창에 알맹이가 들어왔는지 본다. 표의 머리줄 말고 아랫줄에 글자가 있어야 한다."""
+    if d["라디오"]:
+        return True
+    글 = 창글자(d)
+    if "대상이 없습니다" in 글 or "선택후" in 글:
+        return True
+    for tb in d["표"]:
+        for row in tb["줄"][1:]:
+            if any(c.strip() for c in row):
+                return True
+    return False
+
+
+def 창읽기(page, 제목, 기다림초=8):
+    # 창은 먼저 뜨고 알맹이는 그 뒤에 채워진다. 다 채워질 때까지 기다린다.
+    남은 = int(기다림초 * 1000)
     d = json.loads(page.evaluate(POPUP))
+    잰시간 = 0
+    while not 채워졌나(d) and 남은 > 0:
+        page.wait_for_timeout(400)
+        남은 -= 400
+        잰시간 += 400
+        d = json.loads(page.evaluate(POPUP))
     say("")
     say(f"===== {제목} =====")
+    if 잰시간:
+        say(f"  (알맹이가 채워지기까지 {잰시간}밀리초 기다렸습니다)")
     for t in d["상자"]:
         say("  창: " + t)
     for i, tb in enumerate(d["표"]):
@@ -311,13 +344,29 @@ def 창읽기(page, 제목):
     return d
 
 
-def 창글자(d):
-    """창에 적힌 글자를 표까지 싹 모은다"""
-    조각 = list(d["안내"])
-    for tb in d["표"]:
-        for row in tb["줄"]:
-            조각 += row
-    return " ".join(조각)
+def 사유창(page, d, code):
+    """사유 창이면 골라진 사유를 대조하고 확인한다. 진행해도 되면 True."""
+    if not d["라디오"]:
+        return True
+    골라진 = [r for r in d["라디오"] if r["골라짐"]]
+    if len(골라진) != 1:
+        say(f"  [멈춤] 골라진 사유가 {len(골라진)}개입니다. 확인하지 않습니다.")
+        say("  화면의 닫기를 눌러주세요.")
+        return False
+    if 골라진[0]["코드"] != code:
+        say(f"  [멈춤] 사유 {code} 를 바랐는데 {골라진[0]['글자']} 가 골라져 있습니다.")
+        say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
+        return False
+    say(f"  사유 {골라진[0]['글자']} 가 이미 골라져 있습니다. 바라던 것과 같습니다.")
+    if input("\n  이 사유로 확인할까요? (y) >>> ").strip().lower() != "y":
+        say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
+        return False
+    for 글자 in ("선택(enter)", "선택(Enter)", "확인(Enter)", "확인(enter)", "선택", "확인"):
+        if 누르기(page, 글자):
+            say(f"  '{글자}' 누름")
+            return True
+    say("  확인 단추를 못 찾았습니다. 손으로 눌러주세요.")
+    return False
 
 
 print()
@@ -506,30 +555,9 @@ try:
             say("  화면의 확인을 눌러 닫아주세요. 아무것도 바뀌지 않았습니다.")
             raise SystemExit
 
-        # 4 사유 창이면 골라진 사유를 대조한다
+        # 4 사유 창이 먼저 뜨는 경우
         if d["라디오"]:
-            골라진 = [r for r in d["라디오"] if r["골라짐"]]
-            if len(골라진) != 1:
-                say(f"  [멈춤] 골라진 사유가 {len(골라진)}개입니다. 확인하지 않습니다.")
-                say("  화면의 닫기를 눌러주세요.")
-                raise SystemExit
-            if 골라진[0]["코드"] != code:
-                say(f"  [멈춤] 사유 {code} 를 바랐는데 {골라진[0]['글자']} 가 골라져 있습니다.")
-                say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
-                raise SystemExit
-            say(f"  사유 {골라진[0]['글자']} 가 이미 골라져 있습니다. 바라던 것과 같습니다.")
-
-            if input("\n  이 사유로 확인할까요? (y) >>> ").strip().lower() != "y":
-                say("사용자가 중단했습니다. 화면의 닫기를 눌러주세요.")
-                raise SystemExit
-            눌렀나 = False
-            for 글자 in ("선택(enter)", "선택(Enter)", "확인(Enter)", "확인(enter)", "선택", "확인"):
-                if 누르기(page, 글자):
-                    say(f"  '{글자}' 누름")
-                    눌렀나 = True
-                    break
-            if not 눌렀나:
-                say("  확인 단추를 못 찾았습니다. 손으로 눌러주세요.")
+            if not 사유창(page, d, code):
                 raise SystemExit
             d = 창읽기(page, "사유를 고른 뒤")
 
@@ -559,6 +587,12 @@ try:
                     break
             if not 눌렀나:
                 say("  확인 단추를 못 찾았습니다. 손으로 눌러주세요.")
+                raise SystemExit
+
+            # 확인을 누른 뒤에 사유 창이 뜨는 경우도 있다
+            page.wait_for_timeout(800)
+            d = 창읽기(page, "확인을 누른 뒤", 기다림초=3)
+            if not 사유창(page, d, code):
                 raise SystemExit
 
         page.wait_for_timeout(1500)
