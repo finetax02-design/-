@@ -202,6 +202,20 @@ POPUP = r"""() => {
     return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
   };
 
+  // 칸의 글자를 읽는다. 글자가 없으면 입력칸 안의 값을 본다.
+  // 확인창의 변경내용은 글자가 아니라 input 의 값으로 들어 있다.
+  const 칸글자 = c => {
+    let t = (c.innerText || '').trim();
+    if (t) return t;
+    const 값 = [];
+    for (const i of c.querySelectorAll('input,textarea')) if (i.value) 값.push(i.value);
+    for (const sel of c.querySelectorAll('select')) {
+      const o = sel.selectedOptions && sel.selectedOptions[0];
+      if (o) 값.push(o.text || o.value);
+    }
+    return 값.join(' ').trim();
+  };
+
   // 화면의 모든 표. 어느 것이 진짜인지 모르니 자리와 함께 다 적는다.
   for (const tb of document.querySelectorAll('table')) {
     if (!보임(tb)) continue;
@@ -209,7 +223,7 @@ POPUP = r"""() => {
     if (!/변경항목|변경내용/.test(t)) continue;
     const r = tb.getBoundingClientRect();
     const rows = [];
-    for (const tr of tb.rows) rows.push([...tr.cells].map(c => (c.innerText || '').trim()));
+    for (const tr of tb.rows) rows.push([...tr.cells].map(칸글자));
     표.push({ 자리: `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`,
               줄: rows.slice(0, 12) });
   }
@@ -239,7 +253,12 @@ POPUP = r"""() => {
     if (!보임(el)) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 120 || r.height < 40) continue;
-    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    let t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    const 값 = [];
+    for (const i of el.querySelectorAll('input[type=text],input:not([type]),textarea')) {
+      if (i.value) 값.push(i.value);
+    }
+    if (값.length) t += ' [입력칸: ' + 값.join(' / ') + ']';
     if (!t) continue;
     상자.push(`(${Math.round(r.x)},${Math.round(r.y)}) ${Math.round(r.width)}x${Math.round(r.height)} `
               + `<${el.tagName.toLowerCase()} class="${(el.className || '').toString().slice(0, 34)}"> ${t.slice(0, 160)}`);
