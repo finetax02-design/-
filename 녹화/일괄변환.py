@@ -348,13 +348,20 @@ try:
             say(f"체크 실패: {res.get('reason')}")
             raise SystemExit
 
+        첫줄 = rows[묶음[0]]
         print()
         print("  " + "-" * 66)
-        print("   화면을 봐주세요.")
-        print(f"   - 본보기 줄({tmpl + 1}번째 {t.get('nm_trade')})이 선택되어 있고")
-        print(f"   - 바꿀 {len(묶음)}줄에 체크가 들어갔는지")
+        print("   화면에서 두 가지를 확인해주세요. 둘은 역할이 다릅니다.")
+        print()
+        print(f"   1) 본보기 줄  {tmpl + 1}번째  {t.get('s_date')} {t.get('nm_trade')}")
+        print(f"      -> 파란색으로 '선택' 되어 있어야 합니다. 체크는 아닙니다.")
+        print(f"      -> 이 줄의 불공 + 사유 {code} 를 그대로 베낍니다.")
+        print()
+        print(f"   2) 바꿀 줄  {len(묶음)}건  (첫 줄: {묶음[0] + 1}번째"
+              f" {첫줄.get('s_date')} {첫줄.get('nm_trade')})")
+        print(f"      -> 체크표시가 들어가 있어야 합니다. 이 줄들이 불공으로 바뀝니다.")
         print("  " + "-" * 66)
-        if input("\n  맞으면 y, 아니면 Enter >>> ").strip().lower() != "y":
+        if input("\n  이대로 맞으면 y, 아니면 Enter >>> ").strip().lower() != "y":
             say("사용자가 중단했습니다. 값은 바꾸지 않았습니다.")
             raise SystemExit
 
