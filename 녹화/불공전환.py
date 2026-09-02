@@ -99,15 +99,14 @@ TO_불공 = r"""(args) => {
 }"""
 
 # 사유 라디오를 고른다. 값이 아니라 옆에 적힌 글자로 찾아 확인까지 한다.
-# 사유 라디오의 위치를 찾는다. 숨은 입력칸이 아니라 눈에 보이는 글자를 눌러야 한다.
+# 불공제 사유 라디오를 찾는다.
+# 화면에는 같은 목록이 두 벌 있다. 하나는 rect 이 0x0 인 껍데기라 눌러도 소용없다.
+# 크기가 있는 것, 그리고 글자가 '5.' 처럼 코드로 시작하는 것만 대상으로 한다.
 PICK_사유 = r"""(args) => {
   const want = String(args.code);
   const L = [];
-  const radios = [...document.querySelectorAll('input[type=radio]')];
-  L.push(`라디오 ${radios.length}개`);
-  if (!radios.length) return JSON.stringify({ ok: false, reason: '라디오를 못 찾음', log: L });
+  const 사유패턴 = /^[0-9AB][.\s]/;
 
-  // 라디오를 감싼 요소 중 '5.공통매입세액...' 처럼 코드로 시작하는 글자를 가진 것을 찾는다
   const labelOf = el => {
     for (let n = el, i = 0; n && i < 4; n = n.parentElement, i++) {
       const t = (n.innerText || '').trim();
@@ -115,44 +114,59 @@ PICK_사유 = r"""(args) => {
     }
     return null;
   };
-  let hit = null;
-  for (const el of radios) {
-    const lab = labelOf(el);
-    if (!lab) continue;
-    if (lab.text.startsWith(want + '.') || lab.text.startsWith(want + ' ')) {
-      hit = { radio: el, node: lab.node, text: lab.text };
-      break;
-    }
-  }
-  if (!hit) return JSON.stringify({ ok: false, reason: `사유 ${want} 를 못 찾음`, log: L });
 
-  // 값 규칙과도 맞는지 교차 확인한다
-  L.push(`찾음: "${hit.text}"  값=${hit.radio.value}`);
-  if (!String(hit.radio.value).endsWith(want)) {
-    L.push(`[주의] 값이 ${hit.radio.value} 라 코드 ${want} 와 어긋납니다`);
+  const all = [...document.querySelectorAll('input[type=radio]')];
+  const list = [];
+  all.forEach((el, i) => {
+    const lab = labelOf(el);
+    if (!lab || !사유패턴.test(lab.text)) return;
+    const rr = el.getBoundingClientRect();
+    const lr = lab.node.getBoundingClientRect();
+    if (rr.width < 1 && lr.width < 1) return;   // 화면에 없는 껍데기
+    list.push({ i: i, value: el.value, text: lab.text, checked: el.checked,
+                rx: rr.x + rr.width / 2, ry: rr.y + rr.height / 2,
+                lx: lr.x + 8, ly: lr.y + lr.height / 2 });
+  });
+  L.push(`전체 라디오 ${all.length}개 중 화면에 보이는 불공사유 ${list.length}개`);
+  if (!list.length) return JSON.stringify({ ok: false, reason: '보이는 사유 라디오가 없음', log: L });
+
+  const cur = list.find(x => x.checked);
+  L.push('현재 선택: ' + (cur ? `${cur.value} "${cur.text}"` : '없음'));
+
+  const hit = list.find(x => x.text.startsWith(want + '.') || x.text.startsWith(want + ' '));
+  if (!hit) {
+    L.push('있는 항목: ' + list.map(x => x.text.slice(0, 12)).join(' / '));
+    return JSON.stringify({ ok: false, reason: `사유 ${want} 를 못 찾음`, log: L });
   }
-  const r = hit.node.getBoundingClientRect();
-  return JSON.stringify({ ok: true, log: L, text: hit.text, value: hit.radio.value,
-                          x: r.x + Math.min(r.width / 2, 80), y: r.y + r.height / 2 });
+  L.push(`목표: ${hit.value} "${hit.text}"  좌표(${Math.round(hit.rx)},${Math.round(hit.ry)})`);
+  return JSON.stringify({ ok: true, log: L, ...hit });
 }"""
 
-# 원하는 사유가 실제로 선택됐는지 확인한다
+# 확인도 같은 기준으로 한다. 문서 전체에서 첫 체크를 읽으면
+# 거래처 필터 같은 엉뚱한 라디오를 보게 된다.
 CHECKED = r"""(args) => {
   const want = String(args.code);
-  for (const el of document.querySelectorAll('input[type=radio]')) {
-    if (!el.checked) continue;
-    let t = '';
+  const 사유패턴 = /^[0-9AB][.\s]/;
+  const labelOf = el => {
     for (let n = el, i = 0; n && i < 4; n = n.parentElement, i++) {
-      const s = (n.innerText || '').trim();
-      if (s && s.length < 60) { t = s; break; }
+      const t = (n.innerText || '').trim();
+      if (t && t.length < 60) return { node: n, text: t };
     }
-    return JSON.stringify({ text: t, value: el.value,
-                            matches: t.startsWith(want + '.') || t.startsWith(want + ' ') });
+    return null;
+  };
+  for (const el of document.querySelectorAll('input[type=radio]')) {
+    const lab = labelOf(el);
+    if (!lab || !사유패턴.test(lab.text)) continue;
+    const rr = el.getBoundingClientRect();
+    const lr = lab.node.getBoundingClientRect();
+    if (rr.width < 1 && lr.width < 1) continue;
+    if (!el.checked) continue;
+    return JSON.stringify({ value: el.value, text: lab.text,
+                            matches: lab.text.startsWith(want + '.') || lab.text.startsWith(want + ' ') });
   }
-  return JSON.stringify({ text: '', value: '', matches: false });
+  return JSON.stringify({ value: '', text: '(선택 없음)', matches: false });
 }"""
 
-# 사유를 못 고르면 유형을 과세로 되돌린다. 그냥 두면 기본값 4 가 남는다.
 REVERT = r"""(args) => {
   const g = window.__g;
   try { g.setCurrent({ itemIndex: args.row, dataRow: args.row,
@@ -258,11 +272,15 @@ try:
                 print(f"      {page.evaluate(REVERT, {'row': t['row']})}")
                 return False, before, json.loads(page.evaluate(STATE, {"row": t["row"]}))
 
-            # 숨은 입력칸이 아니라 눈에 보이는 글자를 진짜 마우스로 누른다
-            page.mouse.click(pick["x"], pick["y"])
-            page.wait_for_timeout(500)
-            chk = json.loads(page.evaluate(CHECKED, {"code": t["code"]}))
-            print(f"      선택됨: \"{chk.get('text')}\" ({chk.get('value')})")
+            # 입력칸 좌표를 먼저, 안 되면 라벨 왼쪽을 누른다
+            for label, x, y in (("입력칸", pick["rx"], pick["ry"]),
+                                ("라벨", pick["lx"], pick["ly"])):
+                page.mouse.click(x, y)
+                page.wait_for_timeout(450)
+                chk = json.loads(page.evaluate(CHECKED, {"code": t["code"]}))
+                print(f"      {label} 클릭 → \"{chk.get('text')}\"")
+                if chk.get("matches"):
+                    break
             if not chk.get("matches"):
                 print(f"      원하는 사유({t['code']})가 선택되지 않았습니다. 확정하지 않습니다.")
                 page.keyboard.press("Escape")
