@@ -189,44 +189,65 @@ SELECTED_TEXT = r"""() => {
   return '';
 }"""
 
-# 지금 열려 있는 창을 읽는다. 사유 라디오, 표, 안내글, 단추를 함께 본다.
+# 지금 열려 있는 창을 읽는다.
+# 상자를 골라내려 하면 껍데기를 잡는다. 라디오 때와 같다.
+# 그래서 고르지 않고 화면의 표와 단추를 있는 그대로 전부 훑는다.
 POPUP = r"""() => {
-  const 안내 = [];
-  const 표 = [];
-  const 단추 = [];
-  const 라디오 = [];
+  const 안내 = [], 표 = [], 단추 = [], 라디오 = [], 상자 = [];
+  const 보임 = el => {
+    if (el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const st = getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+  };
+
+  // 화면의 모든 표. 어느 것이 진짜인지 모르니 자리와 함께 다 적는다.
+  for (const tb of document.querySelectorAll('table')) {
+    if (!보임(tb)) continue;
+    const t = (tb.innerText || '');
+    if (!/변경항목|변경내용/.test(t)) continue;
+    const r = tb.getBoundingClientRect();
+    const rows = [];
+    for (const tr of tb.rows) rows.push([...tr.cells].map(c => (c.innerText || '').trim()));
+    표.push({ 자리: `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`,
+              줄: rows.slice(0, 12) });
+  }
+
+  // 화면의 모든 단추
+  for (const el of document.querySelectorAll('button,[role=button],[class*=btn],[class*=Btn]')) {
+    if (!보임(el)) continue;
+    const t = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ');
+    if (!t || t.length > 20) continue;
+    const r = el.getBoundingClientRect();
+    단추.push(`${t} (${Math.round(r.x)},${Math.round(r.y)})`);
+  }
 
   // 사유 라디오. 껍데기가 한 벌 더 있으므로 크기가 있는 것만 본다.
   for (const el of document.querySelectorAll('input[type=radio]')) {
     const lab = el.closest('label') || el.parentElement;
-    if (!lab) continue;
-    const r = lab.getBoundingClientRect();
-    if (r.width < 3 || r.height < 3) continue;
+    if (!lab || !보임(lab)) continue;
     const t = (lab.innerText || '').trim().replace(/\s+/g, ' ');
     if (!/^[0-9A-B][.\s]/.test(t)) continue;
+    const r = lab.getBoundingClientRect();
     라디오.push({ 코드: t[0], 글자: t.slice(0, 26), 골라짐: !!el.checked,
                   x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
   }
 
-  const boxes = [...document.querySelectorAll('div,section,dialog')].filter(el => {
-    if (el.offsetParent === null) return false;
-    if (el.clientHeight < 60 || el.clientWidth < 180) return false;
-    const c = (el.className || '').toString();
-    return /dialog|modal|popup|layer/i.test(c);
-  });
-  boxes.sort((a, b) => (a.clientHeight * a.clientWidth) - (b.clientHeight * b.clientWidth));
-  for (const box of boxes.slice(0, 3)) {
-    const t = (box.innerText || '').trim().replace(/\s+/g, ' ');
-    if (t && !안내.includes(t)) 안내.push(t.slice(0, 300));
-    for (const tb of box.querySelectorAll('table'))
-      for (const tr of tb.rows) 표.push([...tr.cells].map(c => (c.innerText || '').trim()));
-    for (const b of box.querySelectorAll('button,[class*=btn],[class*=Btn],[role=button]')) {
-      if (b.offsetParent === null) continue;
-      const bt = (b.innerText || b.value || '').trim();
-      if (bt && bt.length <= 20 && !단추.includes(bt)) 단추.push(bt);
-    }
+  // 창처럼 보이는 것들의 글자. 고르지 않고 다 적는다.
+  for (const el of document.querySelectorAll('[class*=dialog],[class*=Dialog],[class*=modal],[class*=popup],[class*=layer]')) {
+    if (!보임(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 120 || r.height < 40) continue;
+    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    if (!t) continue;
+    상자.push(`(${Math.round(r.x)},${Math.round(r.y)}) ${Math.round(r.width)}x${Math.round(r.height)} `
+              + `<${el.tagName.toLowerCase()} class="${(el.className || '').toString().slice(0, 34)}"> ${t.slice(0, 160)}`);
+    if (!안내.includes(t)) 안내.push(t.slice(0, 300));
   }
-  return JSON.stringify({ 안내: 안내, 표: 표.slice(0, 12), 단추: 단추, 라디오: 라디오 });
+
+  return JSON.stringify({ 안내: 안내.slice(0, 6), 표: 표, 단추: 단추.slice(0, 30),
+                          라디오: 라디오, 상자: 상자.slice(0, 10) });
 }"""
 
 # 글자가 정확히 같은 것을 찾아 누른다
@@ -277,15 +298,26 @@ def 창읽기(page, 제목):
     d = json.loads(page.evaluate(POPUP))
     say("")
     say(f"===== {제목} =====")
-    for t in d["안내"]:
-        say("  글: " + t)
-    for row in d["표"]:
-        say("  표: " + " | ".join(row))
+    for t in d["상자"]:
+        say("  창: " + t)
+    for i, tb in enumerate(d["표"]):
+        say(f"  [표{i} {tb['자리']}]")
+        for row in tb["줄"]:
+            say("    " + " | ".join(row))
     if d["라디오"]:
         say("  사유: " + ", ".join(
             f"[{'O' if r['골라짐'] else ' '}]{r['글자']}" for r in d["라디오"]))
-    say("  단추: " + ", ".join(d["단추"]) if d["단추"] else "  단추: 없음")
+    say("  단추: " + (", ".join(d["단추"]) if d["단추"] else "없음"))
     return d
+
+
+def 창글자(d):
+    """창에 적힌 글자를 표까지 싹 모은다"""
+    조각 = list(d["안내"])
+    for tb in d["표"]:
+        for row in tb["줄"]:
+            조각 += row
+    return " ".join(조각)
 
 
 print()
@@ -467,7 +499,7 @@ try:
         say("'전체일괄변경' 누름")
 
         d = 창읽기(page, "전체일괄변경을 누른 뒤")
-        글전체 = " ".join(d["안내"])
+        글전체 = 창글자(d)
         if "대상이 없습니다" in 글전체 or "선택후" in 글전체:
             say("")
             say("  [멈춤] 위하고가 바꿀 대상을 못 알아봤습니다.")
@@ -502,14 +534,15 @@ try:
             d = 창읽기(page, "사유를 고른 뒤")
 
         # 5 마무리 확인창이 있으면 내용과 건수를 대조한다
-        글전체 = " ".join(d["안내"]) + " " + " ".join(" ".join(r) for r in d["표"])
+        글전체 = 창글자(d)
         if d["표"] or "일괄변경 하시겠" in 글전체:
             if "불공" not in 글전체:
                 say("  [멈춤] 확인창의 변경내용이 비어 있습니다.")
                 say("  무엇을 바꿀지가 위하고에 전달되지 않았습니다.")
                 say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
                 raise SystemExit
-            숫자 = [int(n) for row in d["표"] for c in row for n in re.findall(r"\b(\d+)\b", c)]
+            숫자 = [int(n) for tb in d["표"] for row in tb["줄"] for c in row
+                    for n in re.findall(r"\b(\d+)\b", c)]
             if 숫자 and len(묶음) not in 숫자:
                 say(f"  [멈춤] 확인창의 숫자 {숫자} 가 체크한 {len(묶음)}건과 다릅니다.")
                 say("  확인하지 않습니다. 화면의 닫기를 눌러주세요.")
