@@ -99,13 +99,16 @@ TO_불공 = r"""(args) => {
 }"""
 
 # 사유 라디오를 고른다. 값이 아니라 옆에 적힌 글자로 찾아 확인까지 한다.
-# 불공제 사유 라디오를 찾는다.
+# 불공제 사유 라디오를 찾아 표시해둔다.
 # 화면에는 같은 목록이 두 벌 있다. 하나는 rect 이 0x0 인 껍데기라 눌러도 소용없다.
-# 크기가 있는 것, 그리고 글자가 '5.' 처럼 코드로 시작하는 것만 대상으로 한다.
+# 좌표를 직접 찍는 대신 대상 라벨에 표시를 남겨, Playwright 가 그 요소를
+# 직접 다루게 한다. 라벨은 tabindex=0 이라 초점을 주고 Space 를 누르는 것도 통한다.
 PICK_사유 = r"""(args) => {
   const want = String(args.code);
   const L = [];
   const 사유패턴 = /^[0-9AB][.\s]/;
+
+  document.querySelectorAll('[data-auto-pick]').forEach(e => e.removeAttribute('data-auto-pick'));
 
   const labelOf = el => {
     for (let n = el, i = 0; n && i < 4; n = n.parentElement, i++) {
@@ -117,15 +120,13 @@ PICK_사유 = r"""(args) => {
 
   const all = [...document.querySelectorAll('input[type=radio]')];
   const list = [];
-  all.forEach((el, i) => {
+  all.forEach(el => {
     const lab = labelOf(el);
     if (!lab || !사유패턴.test(lab.text)) return;
     const rr = el.getBoundingClientRect();
     const lr = lab.node.getBoundingClientRect();
     if (rr.width < 1 && lr.width < 1) return;   // 화면에 없는 껍데기
-    list.push({ i: i, value: el.value, text: lab.text, checked: el.checked,
-                rx: rr.x + rr.width / 2, ry: rr.y + rr.height / 2,
-                lx: lr.x + 8, ly: lr.y + lr.height / 2 });
+    list.push({ el: el, node: lab.node, value: el.value, text: lab.text, checked: el.checked });
   });
   L.push(`전체 라디오 ${all.length}개 중 화면에 보이는 불공사유 ${list.length}개`);
   if (!list.length) return JSON.stringify({ ok: false, reason: '보이는 사유 라디오가 없음', log: L });
@@ -138,8 +139,14 @@ PICK_사유 = r"""(args) => {
     L.push('있는 항목: ' + list.map(x => x.text.slice(0, 12)).join(' / '));
     return JSON.stringify({ ok: false, reason: `사유 ${want} 를 못 찾음`, log: L });
   }
-  L.push(`목표: ${hit.value} "${hit.text}"  좌표(${Math.round(hit.rx)},${Math.round(hit.ry)})`);
-  return JSON.stringify({ ok: true, log: L, ...hit });
+
+  // Playwright 가 잡을 수 있게 표시를 남긴다
+  hit.node.setAttribute('data-auto-pick', 'label');
+  hit.el.setAttribute('data-auto-pick', 'input');
+  const r = hit.node.getBoundingClientRect();
+  L.push(`목표: ${hit.value} "${hit.text}"  라벨 rect=(${Math.round(r.x)},${Math.round(r.y)})`
+         + ` ${Math.round(r.width)}x${Math.round(r.height)}  tabindex=${hit.node.getAttribute('tabindex')}`);
+  return JSON.stringify({ ok: true, log: L, value: hit.value, text: hit.text });
 }"""
 
 # 확인도 같은 기준으로 한다. 문서 전체에서 첫 체크를 읽으면
@@ -272,16 +279,25 @@ try:
                 print(f"      {page.evaluate(REVERT, {'row': t['row']})}")
                 return False, before, json.loads(page.evaluate(STATE, {"row": t["row"]}))
 
-            # 입력칸 좌표를 먼저, 안 되면 라벨 왼쪽을 누른다
-            for label, x, y in (("입력칸", pick["rx"], pick["ry"]),
-                                ("라벨", pick["lx"], pick["ly"])):
-                page.mouse.click(x, y)
+            # 라벨은 tabindex=0 인 초점 요소다. 좌표만 찍는 것으로는 부족해
+            # Playwright 가 요소를 직접 다루게 하고, 안 되면 키보드로 누른다.
+            def 시도(이름, fn):
+                try:
+                    fn()
+                except Exception as exc:
+                    print(f"      {이름} 실패: {str(exc)[:90]}")
+                    return False
                 page.wait_for_timeout(450)
-                chk = json.loads(page.evaluate(CHECKED, {"code": t["code"]}))
-                print(f"      {label} 클릭 → \"{chk.get('text')}\"")
-                if chk.get("matches"):
-                    break
-            if not chk.get("matches"):
+                c = json.loads(page.evaluate(CHECKED, {"code": t["code"]}))
+                print(f"      {이름} → \"{c.get('text')}\"")
+                return bool(c.get("matches"))
+
+            lab = page.locator('[data-auto-pick="label"]')
+            got = (시도("라벨 클릭", lambda: lab.click(timeout=4000))
+                   or 시도("초점+Space", lambda: (lab.focus(), page.keyboard.press("Space")))
+                   or 시도("초점+Enter", lambda: (lab.focus(), page.keyboard.press("Enter")))
+                   or 시도("강제 클릭", lambda: lab.click(timeout=4000, force=True)))
+            if not got:
                 print(f"      원하는 사유({t['code']})가 선택되지 않았습니다. 확정하지 않습니다.")
                 page.keyboard.press("Escape")
                 page.wait_for_timeout(500)
