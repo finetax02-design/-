@@ -516,7 +516,20 @@ try:
             raise SystemExit
         say(f"  글자가 딱 맞는 줄 {len(딱맞는것)}개. 위에서부터 눌러봅니다.")
 
+        def 전표탭찾기():
+            """메뉴를 누르면 또 다른 새 탭이 열린다. 그 탭을 찾는다."""
+            탭들 = [pg for ctx in browser.contexts for pg in ctx.pages]
+            딱 = [pg for pg in 탭들
+                  if "SAAC0103" in pg.url
+                  and (표적["cd_com"] in pg.url or f"cno={표적['cno']}" in pg.url
+                       or f"cNum={표적['cno']}" in pg.url)]
+            if 딱:
+                return 딱[0], 탭들
+            그냥 = [pg for pg in 탭들 if "SAAC0103" in pg.url]
+            return (그냥[0] if 그냥 else None), 탭들
+
         도착 = False
+        화면 = None
         for 번째, c in enumerate(딱맞는것, 1):
             if 도착:
                 break
@@ -524,25 +537,54 @@ try:
             찾음.mouse.click(c["x"], c["y"])
             for 지난 in range(0, 15, 3):
                 찾음.wait_for_timeout(3000)
-                # 조회 전에는 자료가 0건이다. 틀이 있느냐로만 본다.
-                try:
-                    g = json.loads(찾음.evaluate(GRID_FOUND))
-                except Exception:
-                    g = {"찾음": False, "건수": -1}
-                say(f"      {지난 + 3:>3}초  전표목록 틀"
-                    f" {'있음' if g['찾음'] else '없음'}  자료 {g['건수']}건")
-                if g["찾음"]:
-                    도착 = True
-                    break
+                전표탭, 탭들 = 전표탭찾기()
+                if 전표탭 is None:
+                    # 같은 탭 안에서 바뀌었을 수도 있으니 그것도 본다
+                    try:
+                        g = json.loads(찾음.evaluate(GRID_FOUND))
+                    except Exception:
+                        g = {"찾음": False, "건수": -1}
+                    say(f"      {지난 + 3:>3}초  탭 {len(탭들)}개"
+                        f"  전자세금계산서 탭 없음"
+                        f"  이 탭의 전표목록 틀 {'있음' if g['찾음'] else '없음'}")
+                    if g["찾음"]:
+                        화면, 도착 = 찾음, True
+                        break
+                    continue
+                say(f"      {지난 + 3:>3}초  탭 {len(탭들)}개"
+                    f"  전자세금계산서 탭 찾음: {전표탭.url.split('/#/')[-1][:56]}")
+                화면, 도착 = 전표탭, True
+                break
             if not 도착 and 번째 < len(딱맞는것):
                 r2 = json.loads(찾음.evaluate(MENU_TYPE, {"글": "전자세금계산서"}))
                 if r2.get("ok"):
                     찾음.wait_for_timeout(1500)
 
+        if not 도착:
+            say("")
+            say("  지금 열린 위하고 탭:")
+            for pg in [pg for ctx in browser.contexts for pg in ctx.pages]:
+                if "wehago.com" in pg.url:
+                    say("    " + pg.url[:120])
+
         if 도착:
+            화면.bring_to_front()
+            화면.wait_for_timeout(3000)
+            h3 = 살펴보기(화면)
+            say("")
+            say("===== 전자세금계산서 화면 =====")
+            say(f"  주소: {화면.url[:130]}")
+            say(f"  고객사명 [{h3['이름']}]  {h3['기수']}  {h3['기간']}")
+            맞나3 = h3["이름"] and (표적["고객사명"] in h3["이름"]
+                                    or h3["이름"] in 표적["고객사명"])
+            say(f"  목록의 이름과 {'맞습니다' if 맞나3 else '다릅니다'}")
+            if not 맞나3:
+                say("  [멈춤] 다른 고객사 화면입니다. 조회를 누르지 않습니다.")
+                raise SystemExit
+
             say("")
             say("===== 조회 줄에 무엇이 있는가 =====")
-            q = json.loads(찾음.evaluate(QUERY_BOX))
+            q = json.loads(화면.evaluate(QUERY_BOX))
             for t in q["고르기"]:
                 say("  고르기: " + t)
             for t in q["입력"]:
@@ -551,26 +593,25 @@ try:
 
             say("")
             say("===== 조회 눌러보기 =====")
-            단추 = json.loads(찾음.evaluate(BTN, {"text": "조회"}))
+            단추 = json.loads(화면.evaluate(BTN, {"text": "조회"}))
             say(f"  '조회' 라고 적힌 것 {len(단추)}개: " + ", ".join(b["자리"] for b in 단추))
             if not 단추:
                 say("  조회 단추를 못 찾았습니다.")
             else:
-                찾음.mouse.click(단추[0]["x"], 단추[0]["y"])
+                화면.mouse.click(단추[0]["x"], 단추[0]["y"])
                 for 지난 in range(0, 20, 4):
-                    찾음.wait_for_timeout(4000)
+                    화면.wait_for_timeout(4000)
                     try:
-                        g = json.loads(찾음.evaluate(GRID_FOUND))
+                        g = json.loads(화면.evaluate(GRID_FOUND))
                     except Exception:
                         g = {"찾음": False, "건수": -1}
-                    say(f"    {지난 + 4:>3}초  자료 {g['건수']}건")
+                    say(f"    {지난 + 4:>3}초  전표목록 틀"
+                        f" {'있음' if g['찾음'] else '없음'}  자료 {g['건수']}건")
                     if g["건수"] > 0:
                         break
 
         say("")
         if 도착:
-            h2 = 살펴보기(찾음)
-            say(f"  고객사명 [{h2['이름']}]  {h2['기수']}  {h2['기간']}")
             say("===== 됩니다 =====")
             say("  수임처에서 회계를 눌러 고객사를 열고,")
             say("  메뉴로 전자세금계산서까지 갈 수 있습니다.")
