@@ -393,27 +393,40 @@ try:
         고른것 = json.loads(찾음.evaluate(EXACT, {"text": "전자세금계산서"}))
         say(f"  '전자세금계산서' 라고 적힌 것 {len(고른것)}개: "
             + ", ".join(c["자리"] for c in 고른것))
-        if 고른것:
-            찾음.mouse.click(고른것[0]["x"], 고른것[0]["y"])
-        else:
-            찾음.keyboard.press("Enter")
-            say("  누를 것이 없어 Enter 를 눌렀습니다.")
+
+        # 떠오르는 목록은 검색칸 바로 아래에 있다.
+        # 화면 안쪽에도 같은 글자가 있으므로 아무거나 누르면 안 된다.
+        아래것 = [c for c in 고른것
+                  if c["y"] > r["y"] and abs(c["x"] - r["x"]) < 500]
+        아래것.sort(key=lambda c: c["y"])
+        나머지 = [c for c in 고른것 if c not in 아래것]
+        차례대로 = 아래것 + 나머지
+        say(f"  검색칸({r['x']},{r['y']}) 아래에 있는 것 {len(아래것)}개."
+            f" 이것부터 눌러봅니다.")
 
         도착 = False
-        for 지난 in range(0, 30, 3):
-            찾음.wait_for_timeout(3000)
-            있나 = False
-            try:
-                d = json.loads(찾음.evaluate(GRAB))
-                있나 = bool(d.get("ok"))
-                건수 = len(d.get("rows") or [])
-            except Exception:
-                건수 = -1
-            say(f"  {지난 + 3:>3}초  주소 {찾음.url.split('/#/')[-1][:56]}"
-                f"  전표 {건수}건")
-            if "SAAC0103" in 찾음.url:
-                도착 = True
+        for 번째, c in enumerate(차례대로, 1):
+            if 도착:
                 break
+            say(f"  [{번째}] ({c['자리']}) 를 눌러봅니다.")
+            찾음.mouse.click(c["x"], c["y"])
+            for 지난 in range(0, 12, 3):
+                찾음.wait_for_timeout(3000)
+                try:
+                    d = json.loads(찾음.evaluate(GRAB))
+                    건수 = len(d.get("rows") or []) if d.get("ok") else -1
+                except Exception:
+                    건수 = -1
+                say(f"      {지난 + 3:>3}초  주소 {찾음.url.split('/#/')[-1][:56]}"
+                    f"  전표 {건수}건")
+                if "SAAC0103" in 찾음.url:
+                    도착 = True
+                    break
+            if not 도착 and 번째 < len(차례대로):
+                # 다음 것을 누르려면 목록이 다시 떠 있어야 한다
+                r2 = json.loads(찾음.evaluate(MENU_TYPE, {"글": "전자세금계산서"}))
+                if r2.get("ok"):
+                    찾음.wait_for_timeout(1500)
 
         say("")
         if 도착:
