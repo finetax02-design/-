@@ -244,6 +244,110 @@ MENU_ITEMS = r"""(args) => {
   return JSON.stringify(결과.slice(0, 20));
 }"""
 
+# 전표 목록 틀이 있는지만 본다. 조회 전에는 자료가 0건이라
+# 건수로 따지면 화면에 와 있어도 못 왔다고 여기게 된다.
+GRID_FOUND = r"""() => {
+  const gridish = o => {
+    if (!o || (typeof o !== 'object' && typeof o !== 'function')) return false;
+    try { return typeof o.getColumns === 'function' && typeof o.getValues === 'function'; }
+    catch (e) { return false; }
+  };
+  const seen = new WeakSet();
+  const queue = [{ o: window, d: 0 }];
+  const SKIP = /^(document|location|navigator|parent|top|self|frames|history|localStorage|sessionStorage|indexedDB|caches|crypto)$/;
+  let visited = 0, 건수 = -1, 찾음 = false;
+  while (queue.length && visited < 60000) {
+    const { o, d } = queue.shift();
+    if (d > 9) continue;
+    let keys = [];
+    try { keys = Object.keys(o); } catch (e) { continue; }
+    for (const k of keys) {
+      if (d === 0 && SKIP.test(k)) continue;
+      let v;
+      try { v = o[k]; } catch (e) { continue; }
+      if (!v || (typeof v !== 'object' && typeof v !== 'function')) continue;
+      try { if (v.nodeType || v === window) continue; } catch (e) { continue; }
+      try { if (seen.has(v)) continue; seen.add(v); } catch (e) { continue; }
+      visited++;
+      if (gridish(v)) {
+        let names = [];
+        try { names = v.getColumns().map(c => String(c.name || c.fieldName || '')); } catch (e) {}
+        if (names.includes('nm_acctit_cha')) {
+          찾음 = true;
+          let n = 0;
+          try {
+            let src = v;
+            try { const dp = v.getDataSource(); if (dp) src = dp; } catch (e) {}
+            n = src.getRowCount() || 0;
+          } catch (e) {}
+          if (n > 건수) 건수 = n;
+        }
+      }
+      if (d < 9) queue.push({ o: v, d: d + 1 });
+    }
+  }
+  return JSON.stringify({ 찾음: 찾음, 건수: 건수 });
+}"""
+
+# 조회 줄에 무엇이 있는지 적는다. 기간, 구분, 자료, 거래처, 조회 단추.
+QUERY_BOX = r"""() => {
+  const 것들 = { 입력: [], 고르기: [], 단추: [] };
+  for (const el of document.querySelectorAll('input')) {
+    if (el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.y > 320 || r.width < 20) continue;
+    것들.입력.push(`(${Math.round(r.x)},${Math.round(r.y)}) ${Math.round(r.width)}폭`
+      + `  값[${el.value}]  힌트[${el.placeholder || ''}]  ${(el.className||'').toString().slice(0,30)}`);
+  }
+  for (const el of document.querySelectorAll('select')) {
+    if (el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.y > 320) continue;
+    const 것 = [...el.options].map(o => o.text).slice(0, 8);
+    것들.고르기.push(`(${Math.round(r.x)},${Math.round(r.y)}) 값[${el.value}]`
+      + `  고를것: ${것.join(' / ')}`);
+  }
+  for (const el of document.querySelectorAll('button,a,span,div,[role=button]')) {
+    if (el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.y > 320 || r.width < 10) continue;
+    const t = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ');
+    if (!t || t.length > 14) continue;
+    let 안쪽 = true;
+    for (const c of el.children) {
+      const ct = (c.innerText || '').trim().replace(/\s+/g, ' ');
+      if (ct === t) { 안쪽 = false; break; }
+    }
+    if (!안쪽) continue;
+    것들.단추.push(`(${Math.round(r.x)},${Math.round(r.y)}) [${t}]`);
+  }
+  것들.입력 = 것들.입력.slice(0, 14);
+  것들.고르기 = 것들.고르기.slice(0, 10);
+  것들.단추 = 것들.단추.slice(0, 30);
+  return JSON.stringify(것들);
+}"""
+
+# 글자가 딱 맞는 것을 찾는다 (조회 단추 누르기용)
+BTN = r"""(args) => {
+  const out = [];
+  for (const el of document.querySelectorAll('button,a,span,div,[role=button]')) {
+    if (el.offsetParent === null) continue;
+    const t = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ');
+    if (t !== args.text) continue;
+    let 안쪽 = true;
+    for (const c of el.children) {
+      const ct = (c.innerText || '').trim().replace(/\s+/g, ' ');
+      if (ct === t) { 안쪽 = false; break; }
+    }
+    if (!안쪽) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) continue;
+    out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+               자리: `${Math.round(r.x)},${Math.round(r.y)}` });
+  }
+  return JSON.stringify(out.slice(0, 8));
+}"""
+
 lines = []
 
 
@@ -420,22 +524,48 @@ try:
             찾음.mouse.click(c["x"], c["y"])
             for 지난 in range(0, 15, 3):
                 찾음.wait_for_timeout(3000)
-                # 주소는 안 바뀌기도 한다. 전표 목록이 잡히는지로 본다.
+                # 조회 전에는 자료가 0건이다. 틀이 있느냐로만 본다.
                 try:
-                    d = json.loads(찾음.evaluate(GRAB))
-                    잡혔나 = bool(d.get("ok"))
-                    건수 = len(d.get("rows") or [])
+                    g = json.loads(찾음.evaluate(GRID_FOUND))
                 except Exception:
-                    잡혔나, 건수 = False, -1
-                say(f"      {지난 + 3:>3}초  전표목록 {'잡힘' if 잡혔나 else '못 잡음'}"
-                    f"  {건수}건  주소 {찾음.url.split('/#/')[-1][:44]}")
-                if 잡혔나:
+                    g = {"찾음": False, "건수": -1}
+                say(f"      {지난 + 3:>3}초  전표목록 틀"
+                    f" {'있음' if g['찾음'] else '없음'}  자료 {g['건수']}건")
+                if g["찾음"]:
                     도착 = True
                     break
             if not 도착 and 번째 < len(딱맞는것):
                 r2 = json.loads(찾음.evaluate(MENU_TYPE, {"글": "전자세금계산서"}))
                 if r2.get("ok"):
                     찾음.wait_for_timeout(1500)
+
+        if 도착:
+            say("")
+            say("===== 조회 줄에 무엇이 있는가 =====")
+            q = json.loads(찾음.evaluate(QUERY_BOX))
+            for t in q["고르기"]:
+                say("  고르기: " + t)
+            for t in q["입력"]:
+                say("  입력: " + t)
+            say("  단추: " + ", ".join(q["단추"]))
+
+            say("")
+            say("===== 조회 눌러보기 =====")
+            단추 = json.loads(찾음.evaluate(BTN, {"text": "조회"}))
+            say(f"  '조회' 라고 적힌 것 {len(단추)}개: " + ", ".join(b["자리"] for b in 단추))
+            if not 단추:
+                say("  조회 단추를 못 찾았습니다.")
+            else:
+                찾음.mouse.click(단추[0]["x"], 단추[0]["y"])
+                for 지난 in range(0, 20, 4):
+                    찾음.wait_for_timeout(4000)
+                    try:
+                        g = json.loads(찾음.evaluate(GRID_FOUND))
+                    except Exception:
+                        g = {"찾음": False, "건수": -1}
+                    say(f"    {지난 + 4:>3}초  자료 {g['건수']}건")
+                    if g["건수"] > 0:
+                        break
 
         say("")
         if 도착:
