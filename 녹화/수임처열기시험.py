@@ -191,6 +191,50 @@ FIND_ROW = r"""(args) => {
   return JSON.stringify(후보.slice(0, 10));
 }"""
 
+# 위쪽 메뉴 검색칸에 글자를 넣는다. 힌트에 '메뉴' 가 든 칸을 고른다.
+MENU_TYPE = r"""(args) => {
+  let 표적 = null;
+  for (const el of document.querySelectorAll('input')) {
+    if (el.offsetParent === null) continue;
+    const 힌트 = el.placeholder || '';
+    if (!/메뉴/.test(힌트)) continue;
+    표적 = el;
+    break;
+  }
+  if (!표적) return JSON.stringify({ ok: false, reason: '메뉴 검색칸이 없음' });
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value').set;
+  setter.call(표적, args.글);
+  표적.dispatchEvent(new Event('input', { bubbles: true }));
+  표적.dispatchEvent(new Event('change', { bubbles: true }));
+  표적.focus();
+  const r = 표적.getBoundingClientRect();
+  return JSON.stringify({ ok: true, 값: 표적.value,
+                          x: Math.round(r.x + r.width / 2),
+                          y: Math.round(r.y + r.height / 2) });
+}"""
+
+# 글자가 정확히 같은 것을 찾는다
+EXACT = r"""(args) => {
+  const out = [];
+  for (const el of document.querySelectorAll('button,a,li,span,div,[role=button],[role=menuitem]')) {
+    if (el.offsetParent === null) continue;
+    const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
+    if (t !== args.text) continue;
+    let 안쪽 = true;
+    for (const c of el.children) {
+      const ct = (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ');
+      if (ct === args.text) { 안쪽 = false; break; }
+    }
+    if (!안쪽) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 5 || r.height < 5) continue;
+    out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+               자리: `${Math.round(r.x)},${Math.round(r.y)}` });
+  }
+  return JSON.stringify(out.slice(0, 10));
+}"""
+
 lines = []
 
 
@@ -300,8 +344,12 @@ try:
         for 지난 in range(0, 40, 3):
             page.wait_for_timeout(3000)
             탭들 = [pg for ctx in browser.contexts for pg in ctx.pages]
+            # 처음 열릴 때 주소는 cd_com 이 아니라 cNum, taxAccounts 로 적힌다.
+            #   ...?wehagoT&cNum=5583734&taxNum=9009&taxAccounts=4&taxDate=...
             맞는탭 = [pg for pg in 탭들
-                      if "smarta.wehago.com" in pg.url and 표적["cd_com"] in pg.url]
+                      if "smarta.wehago.com" in pg.url
+                      and (표적["cd_com"] in pg.url
+                           or f"cNum={표적['cno']}" in pg.url)]
             say(f"  {지난 + 3:>3}초  탭 {len(탭들)}개 (처음 {전탭}개)"
                 f"  그 고객사 화면 {len(맞는탭)}개")
             if 맞는탭:
@@ -317,7 +365,7 @@ try:
             raise SystemExit
 
         찾음.bring_to_front()
-        찾음.wait_for_timeout(3000)
+        찾음.wait_for_timeout(4000)
         h = 살펴보기(찾음)
         say("")
         say("===== 열린 화면 =====")
@@ -325,8 +373,63 @@ try:
         say(f"  고객사명 [{h['이름']}]  {h['기수']}  {h['기간']}")
         맞나 = h["이름"] and (표적["고객사명"] in h["이름"] or h["이름"] in 표적["고객사명"])
         say(f"  목록의 이름과 {'맞습니다' if 맞나 else '다릅니다'} (목록: {표적['고객사명']})")
+        if not 맞나:
+            say("")
+            say("  고객사가 제대로 안 잡혔습니다. 여기서 멈춥니다.")
+            raise SystemExit
+
         say("")
-        say("===== 됩니다 =====" if 맞나 else "===== 아직 아닙니다 =====")
+        say("===== 전자세금계산서 화면까지 가보기 =====")
+        r = json.loads(찾음.evaluate(MENU_TYPE, {"글": "전자세금계산서"}))
+        if not r.get("ok"):
+            say(f"  메뉴 검색칸을 못 찾았습니다: {r.get('reason')}")
+            say("  지금 화면에 보이는 입력칸:")
+            for b in json.loads(찾음.evaluate(SEARCH_BOX)):
+                say(f"    ({b['자리']}) 너비 {b['w']}  힌트[{b['힌트']}]  값[{b['값']}]")
+            raise SystemExit
+        say(f"  메뉴 검색칸에 [{r['값']}] 를 넣었습니다.")
+        찾음.wait_for_timeout(2000)
+
+        고른것 = json.loads(찾음.evaluate(EXACT, {"text": "전자세금계산서"}))
+        say(f"  '전자세금계산서' 라고 적힌 것 {len(고른것)}개: "
+            + ", ".join(c["자리"] for c in 고른것))
+        if 고른것:
+            찾음.mouse.click(고른것[0]["x"], 고른것[0]["y"])
+        else:
+            찾음.keyboard.press("Enter")
+            say("  누를 것이 없어 Enter 를 눌렀습니다.")
+
+        도착 = False
+        for 지난 in range(0, 30, 3):
+            찾음.wait_for_timeout(3000)
+            있나 = False
+            try:
+                d = json.loads(찾음.evaluate(GRAB))
+                있나 = bool(d.get("ok"))
+                건수 = len(d.get("rows") or [])
+            except Exception:
+                건수 = -1
+            say(f"  {지난 + 3:>3}초  주소 {찾음.url.split('/#/')[-1][:56]}"
+                f"  전표 {건수}건")
+            if "SAAC0103" in 찾음.url:
+                도착 = True
+                break
+
+        say("")
+        if 도착:
+            h2 = 살펴보기(찾음)
+            say(f"  고객사명 [{h2['이름']}]  {h2['기수']}  {h2['기간']}")
+            say("===== 됩니다 =====")
+            say("  수임처에서 회계를 눌러 고객사를 열고,")
+            say("  메뉴로 전자세금계산서까지 갈 수 있습니다.")
+        else:
+            say("===== 전자세금계산서까지는 아직 =====")
+            say(f"  지금 주소: {찾음.url[:130]}")
+            say("  화면을 보시고 어디에 멈춰 있는지 알려주세요.")
+
+        say("")
+        say("  [알림] 고객사를 열 때마다 탭이 하나씩 늘어납니다.")
+        say("  순회할 때는 한 고객사를 마치면 그 탭을 닫아야 합니다.")
 
         browser.close()
 
