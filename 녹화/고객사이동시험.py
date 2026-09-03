@@ -176,50 +176,79 @@ if input("  옮겨가 볼까요? (y) >>> ").strip().lower() != "y":
     input("\n  창을 닫으려면 Enter >>> ")
     raise SystemExit
 
+def 기다리며보기(page, 바라는이름, 초=25):
+    """화면이 그 고객사로 바뀔 때까지 지켜본다. 바뀌는 데 시간이 걸린다."""
+    끝 = 초
+    본것 = []
+    while True:
+        h, 건수 = 살펴보기(page)
+        본것.append((초 - 끝, h["이름"], h["기수"], 건수))
+        맞나 = h["이름"] and (바라는이름 in h["이름"] or h["이름"] in 바라는이름)
+        if 맞나 or 끝 <= 0:
+            return h, 건수, 맞나, 본것
+        page.wait_for_timeout(2500)
+        끝 -= 2.5
+
+
 try:
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(CDP)
-        pages = [pg for ctx in browser.contexts for pg in ctx.pages
-                 if "wehago.com" in pg.url]
-        if not pages:
-            say("위하고 탭을 찾지 못했습니다.")
+        pages = [pg for ctx in browser.contexts for pg in ctx.pages]
+        # 이미 고객사 화면이 떠 있는 탭이라야 한다.
+        # 아무 탭이나 끌고 가면 고객사가 안 잡히고 세무법인 이름만 나온다.
+        살아있는탭 = [pg for pg in pages
+                     if "smarta.wehago.com" in pg.url and "cd_com=" in pg.url]
+        if not 살아있는탭:
+            say("고객사 화면이 떠 있는 탭이 없습니다.")
+            say("")
+            say("  아무 탭이나 주소로 끌고 가면 고객사가 안 잡힙니다.")
+            say("  위하고에서 아무 고객사나 하나 열어 전자세금계산서 화면까지")
+            say("  들어가신 뒤에 다시 실행해주세요.")
             raise SystemExit
-        pages.sort(key=lambda pg: "smarta.wehago.com" not in pg.url)
-        page = pages[0]
+        page = 살아있는탭[0]
         page.bring_to_front()
 
         h, 건수 = 살펴보기(page)
         say("===== 옮기기 전 =====")
         say(f"  주소: {page.url[:130]}")
         say(f"  고객사명 [{h['이름']}]  {h['기수']}  {h['기간']}")
-        say(f"  제목: {h['제목']}")
         say(f"  전표 {건수}건" if 건수 >= 0 else "  전표를 못 읽음")
+        if 표적["고객사명"] in (h["이름"] or ""):
+            say("")
+            say("  [멈춤] 지금 열려 있는 고객사와 옮겨갈 고객사가 같습니다.")
+            say("  다른 고객사를 골라 다시 해주세요. 그래야 바뀌는지 알 수 있습니다.")
+            raise SystemExit
 
         say("")
-        say("===== 1) 주소를 바로 갈아끼우기 =====")
-        page.goto(주소, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(4000)
-        h1, 건수1 = 살펴보기(page)
+        say("===== 1) 주소만 갈아끼우기 (같은 탭 안에서) =====")
+        page.evaluate("(u) => { window.location.href = u; }", 주소)
+        h1, 건수1, 맞나1, 본것1 = 기다리며보기(page, 표적["고객사명"])
+        for 지난, 이름, 기수, 건 in 본것1:
+            say(f"  {지난:>4.0f}초  이름[{이름}]  {기수}  전표 {건}건")
         say(f"  주소: {page.url[:130]}")
-        say(f"  고객사명 [{h1['이름']}]  {h1['기수']}  {h1['기간']}")
-        say(f"  제목: {h1['제목']}")
-        say(f"  전표 {건수1}건" if 건수1 >= 0 else "  전표를 못 읽음")
-        맞나1 = 표적["고객사명"] in (h1["이름"] or "") or (h1["이름"] or "") in 표적["고객사명"]
-        say(f"  목록의 이름과 {'맞습니다' if 맞나1 and h1['이름'] else '다릅니다'}"
+        say(f"  목록의 이름과 {'맞습니다' if 맞나1 else '다릅니다'}"
             f" (목록: {표적['고객사명']})")
 
-        if not 맞나1 or not h1["이름"]:
+        맞나2 = False
+        if not 맞나1:
             say("")
             say("===== 2) 새로고침까지 해보기 =====")
-            page.reload(wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(6000)
-            h2, 건수2 = 살펴보기(page)
+            page.reload(wait_until="domcontentloaded", timeout=40000)
+            h2, 건수2, 맞나2, 본것2 = 기다리며보기(page, 표적["고객사명"], 초=30)
+            for 지난, 이름, 기수, 건 in 본것2:
+                say(f"  {지난:>4.0f}초  이름[{이름}]  {기수}  전표 {건}건")
             say(f"  주소: {page.url[:130]}")
-            say(f"  고객사명 [{h2['이름']}]  {h2['기수']}  {h2['기간']}")
-            say(f"  제목: {h2['제목']}")
-            say(f"  전표 {건수2}건" if 건수2 >= 0 else "  전표를 못 읽음")
-            맞나2 = 표적["고객사명"] in (h2["이름"] or "") or (h2["이름"] or "") in 표적["고객사명"]
-            say(f"  목록의 이름과 {'맞습니다' if 맞나2 and h2['이름'] else '다릅니다'}")
+            say(f"  목록의 이름과 {'맞습니다' if 맞나2 else '다릅니다'}")
+
+        say("")
+        if 맞나1 or 맞나2:
+            say("===== 됩니다 =====")
+            say("  주소로 고객사를 옮길 수 있습니다."
+                + ("  (주소만 갈아끼우면 됩니다)" if 맞나1 else "  (새로고침까지 해야 합니다)"))
+        else:
+            say("===== 안 됩니다 =====")
+            say("  주소로는 고객사가 안 바뀝니다.")
+            say("  수임처 화면에서 고르는 절차를 거쳐야 하는 것으로 보입니다.")
 
         browser.close()
 
