@@ -163,17 +163,33 @@ if 차례:
 input("  준비되었으면 Enter >>> ")
 print()
 
-본것 = None
+print("  지켜보는 중입니다. 위하고에서 수임처를 하나씩 열어주세요.")
+print("  새 고객사를 보면 아래에 한 줄씩 찍힙니다.")
+print()
+
+마지막알림 = 0.0
 try:
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(CDP)
         while True:
             try:
-                pages = [pg for ctx in browser.contexts for pg in ctx.pages
+                모든탭 = [pg for ctx in browser.contexts for pg in ctx.pages]
+                위하고탭 = [pg for pg in 모든탭 if "wehago.com" in pg.url]
+                pages = [pg for pg in 위하고탭
                          if "smarta.wehago.com" in pg.url and "cd_com=" in pg.url]
             except Exception:
-                print("  크롬과 끊어졌습니다. 창을 다시 열고 실행해주세요.")
+                print()
+                print("  크롬과 끊어졌습니다. 크롬열기.bat 으로 창을 다시 열고 실행해주세요.")
                 break
+
+            # 살아 있다는 것을 보여준다. 그러지 않으면 멎은 줄 안다.
+            지금 = time.time()
+            if 지금 - 마지막알림 >= 3:
+                마지막알림 = 지금
+                때 = datetime.datetime.now().strftime("%H:%M:%S")
+                print(f"\r  [{때}] 지켜보는 중   위하고 탭 {len(위하고탭)}개"
+                      f"   그중 고객사 화면 {len(pages)}개"
+                      f"   적은 곳 {len(차례)}곳        ", end="", flush=True)
 
             for pg in pages:
                 조각 = 주소풀기(pg.url)
@@ -195,12 +211,15 @@ try:
                 }
                 차례.append(열쇠)
                 저장(있는것, 차례)
-                print(f"  {len(차례):>3}곳  {이름 or '(이름 못 읽음)'}"
-                      f"  {기수 or 조각['gisu'] + '기'}  {조각['cd_com']}")
+                print(f"\r  {len(차례):>3}곳  {이름 or '(이름 못 읽음)'}"
+                      f"  {기수 or 조각['gisu'] + '기'}  {조각['cd_com']}"
+                      f"{' ' * 20}")
+                마지막알림 = 0.0
 
             time.sleep(2)
 
 except KeyboardInterrupt:
+    print()
     print()
     print("  그만둡니다.")
 except Exception:
