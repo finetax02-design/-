@@ -4,113 +4,47 @@
 프로그램 속에서는 목록을 못 찾았다. 그래서 평소 일하듯 고객사를 오가면
 그때마다 주소를 받아 적어 목록을 쌓는다.
 
-이 창을 켜둔 채로 위하고에서 담당 업체를 하나씩 열면 된다.
-한 바퀴 돌고 나면 목록이 다 만들어진다. 그 뒤로는 그 목록을 쓴다.
+**크롬에 붙지 않는다.**
+앞서 Playwright 로 크롬에 붙었더니 새 화면이 뜨는 것을 붙잡아
+두 번째 회사로 들어가지지 않았다. 프로그램을 닫아야 풀렸다.
 
-값은 하나도 바꾸지 않는다. 주소와 화면 위쪽 고객사명만 읽는다.
+크롬은 9222 번으로 열려 있는 탭 목록을 그냥 알려준다.
+주소창을 밖에서 엿보는 것과 같아서 크롬이 하는 일을 조금도 방해하지 않는다.
+
+    http://localhost:9222/json   <- 탭마다 제목과 주소가 적혀 있다
+
+고객사명은 탭 제목에서 얻는다.
+
+    "전자세금계산서(2기) - 오벨피부과의원"
+       화면       기수      고객사명
+
+이 창을 켜둔 채로 위하고에서 담당 업체를 하나씩 열면 된다.
+한 바퀴 돌고 나면 목록이 다 만들어진다.
+
+값은 하나도 바꾸지 않는다. 크롬을 건드리지도 않는다.
 """
-import collections
-import datetime
-import time
 import csv
+import datetime
 import json
 import re
+import time
 import traceback
+import urllib.request
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
-
-CDP = "http://localhost:9222"
+CDP목록 = "http://localhost:9222/json"
 HERE = Path(__file__).resolve().parent
-RULES = HERE / "불공규칙표.csv"
 OUT = HERE / "고객사목록.csv"
 
-과세 = "51"
-불공 = "54"
-사유이름 = {"3": "비영업용승용차유지", "4": "면세사업관련", "5": "공통매입세액안분"}
-
-GRAB = r"""() => {
-  // 같은 열 구성을 가진 그리드가 여러 개일 수 있다. 화면에 안 보이는 빈 것도 있다.
-  // 그래서 하나만 찾고 멈추지 않고 전부 모은 뒤 자료가 가장 많은 것을 고른다.
-  const gridish = o => {
-    if (!o || (typeof o !== 'object' && typeof o !== 'function')) return false;
-    try { return typeof o.getColumns === 'function' && typeof o.getValues === 'function'; }
-    catch (e) { return false; }
-  };
-  const found = [];
-  const seen = new WeakSet();
-  const queue = [{ o: window, d: 0 }];
-  const SKIP = /^(document|location|navigator|parent|top|self|frames|history|localStorage|sessionStorage|indexedDB|caches|crypto)$/;
-  let visited = 0;
-  while (queue.length && visited < 60000) {
-    const { o, d } = queue.shift();
-    if (d > 9) continue;
-    let keys = [];
-    try { keys = Object.keys(o); } catch (e) { continue; }
-    for (const k of keys) {
-      if (d === 0 && SKIP.test(k)) continue;
-      let v;
-      try { v = o[k]; } catch (e) { continue; }
-      if (!v || (typeof v !== 'object' && typeof v !== 'function')) continue;
-      try { if (v.nodeType || v === window) continue; } catch (e) { continue; }
-      try { if (seen.has(v)) continue; seen.add(v); } catch (e) { continue; }
-      visited++;
-      if (gridish(v)) {
-        let names = [];
-        try { names = v.getColumns().map(c => String(c.name || c.fieldName || '')); } catch (e) {}
-        if (names.includes('nm_acctit_cha')) found.push(v);
-      }
-      if (d < 9) queue.push({ o: v, d: d + 1 });
-    }
-  }
-  if (!found.length) return JSON.stringify({ ok: false, reason: '전표 목록을 못 찾음' });
-
-  const 후보 = [];
-  let best = null, bestN = -1;
-  for (const g of found) {
-    let src = g, n = 0, err = '';
-    try { const dp = g.getDataSource(); if (dp) src = dp; } catch (e) {}
-    try { n = src.getRowCount() || 0; } catch (e) { err = String(e).slice(0, 60); }
-    후보.push({ 건수: n, 오류: err });
-    if (n > bestN) { bestN = n; best = { g: g, src: src, n: n }; }
-  }
-  if (!best || best.n <= 0) {
-    return JSON.stringify({ ok: false, reason: '전표 목록은 찾았으나 자료가 없음', 후보: 후보 });
-  }
-  window.__g = best.g;
-  let rows = [], err = '';
-  try { rows = best.src.getJsonRows(0, best.n - 1) || []; }
-  catch (e) { err = String(e).slice(0, 120); }
-  return JSON.stringify({ ok: rows.length > 0, rows: rows, 후보: 후보,
-                          reason: rows.length ? '' : ('자료를 읽지 못함 ' + err) });
-}"""
-
-
-
-
-# 화면 위쪽의 고객사명과 기수를 읽는다
-HEADER = r"""() => {
-  const 나온것 = [];
-  for (const el of document.querySelectorAll('span,div,button,a,strong')) {
-    if (el.offsetParent === null) continue;
-    const r = el.getBoundingClientRect();
-    if (r.y > 40 || r.width < 2) continue;
-    let own = '';
-    for (const n of el.childNodes) if (n.nodeType === 3) own += n.textContent;
-    own = own.trim().replace(/\s+/g, ' ');
-    if (!own || own.length > 30) continue;
-    나온것.push({ x: Math.round(r.x), 글자: own });
-  }
-  나온것.sort((a, b) => a.x - b.x);
-  let 이름 = '', 기수 = '';
-  for (const t of 나온것) {
-    if (!기수 && /^\d+기$/.test(t.글자)) { 기수 = t.글자; continue; }
-    if (!이름 && t.x < 400 && !/^\d/.test(t.글자) && t.글자.length >= 2) 이름 = t.글자;
-  }
-  return JSON.stringify({ 이름: 이름, 기수: 기수 });
-}"""
-
 머리 = ["고객사명", "cd_com", "gisu", "cno", "yminsa", "할것", "처음본때"]
+
+
+def 탭들():
+    """크롬이 알려주는 탭 목록. 붙는 것이 아니라 물어보기만 한다."""
+    열기 = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with 열기.open(CDP목록, timeout=5) as r:
+        것들 = json.loads(r.read().decode("utf-8", "replace"))
+    return [t for t in 것들 if t.get("type") == "page"]
 
 
 def 주소풀기(url):
@@ -121,10 +55,30 @@ def 주소풀기(url):
     return 조각
 
 
+def 이름풀기(title):
+    """탭 제목에서 고객사명과 기수를 뽑는다.
+
+    '전자세금계산서(2기) - 오벨피부과의원' 처럼 되어 있다.
+    """
+    t = (title or "").strip()
+    기수 = ""
+    m = re.search(r"\((\d+)기\)", t)
+    if m:
+        기수 = m.group(1)
+    이름 = ""
+    if " - " in t:
+        이름 = t.split(" - ")[-1].strip()
+    elif "-" in t:
+        이름 = t.rsplit("-", 1)[-1].strip()
+    # 제목이 잘려 있거나 화면 이름만 있는 경우를 걸러낸다
+    if 이름 in ("WEHAGO", "WEHAGO T", "") or len(이름) > 40:
+        이름 = ""
+    return 이름, 기수
+
+
 def 읽어오기():
     """이미 적어둔 것을 읽는다. 두 번 적지 않으려는 것이다."""
-    있는것 = {}
-    차례 = []
+    있는것, 차례 = {}, []
     if OUT.exists():
         with OUT.open(encoding="utf-8-sig") as f:
             for r in csv.DictReader(f):
@@ -152,6 +106,7 @@ print("  이 창을 켜둔 채로 위하고에서 담당 업체를 하나씩 열
 print("  전자세금계산서 화면까지 들어가시면 그때 받아 적습니다.")
 print("  평소 일하시던 대로 하시면 됩니다.")
 print()
+print("  크롬을 건드리지 않습니다. 주소만 밖에서 엿봅니다.")
 print("  그만두려면 이 창에서 Ctrl+C 를 누르세요.")
 print("  적은 것은 그때까지 다 저장되어 있습니다.")
 print()
@@ -160,63 +115,69 @@ print()
 if 차례:
     print(f"  이미 적어둔 고객사 {len(차례)}곳이 있습니다. 이어서 적습니다.")
     print()
+
+try:
+    탭들()
+except Exception as e:
+    print(f"  크롬을 찾지 못했습니다: {str(e)[:90]}")
+    print("  크롬열기.bat 으로 연 창이 떠 있어야 합니다.")
+    input("\n  창을 닫으려면 Enter >>> ")
+    raise SystemExit
+
 input("  준비되었으면 Enter >>> ")
 print()
-
 print("  지켜보는 중입니다. 위하고에서 수임처를 하나씩 열어주세요.")
-print("  새 고객사를 보면 아래에 한 줄씩 찍힙니다.")
 print()
 
 마지막알림 = 0.0
+탈났던때 = 0
 try:
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(CDP)
-        while True:
-            try:
-                모든탭 = [pg for ctx in browser.contexts for pg in ctx.pages]
-                위하고탭 = [pg for pg in 모든탭 if "wehago.com" in pg.url]
-                pages = [pg for pg in 위하고탭
-                         if "smarta.wehago.com" in pg.url and "cd_com=" in pg.url]
-            except Exception:
+    while True:
+        try:
+            것들 = 탭들()
+            탈났던때 = 0
+        except Exception as e:
+            탈났던때 += 1
+            print(f"\r  크롬과 말이 안 통합니다 ({탈났던때}번째) {str(e)[:50]}        ",
+                  end="", flush=True)
+            if 탈났던때 >= 20:
                 print()
-                print("  크롬과 끊어졌습니다. 크롬열기.bat 으로 창을 다시 열고 실행해주세요.")
+                print("  크롬이 닫힌 것 같습니다. 그만둡니다.")
                 break
+            time.sleep(3)
+            continue
 
-            # 살아 있다는 것을 보여준다. 그러지 않으면 멎은 줄 안다.
-            지금 = time.time()
-            if 지금 - 마지막알림 >= 3:
-                마지막알림 = 지금
-                때 = datetime.datetime.now().strftime("%H:%M:%S")
-                print(f"\r  [{때}] 지켜보는 중   위하고 탭 {len(위하고탭)}개"
-                      f"   그중 고객사 화면 {len(pages)}개"
-                      f"   적은 곳 {len(차례)}곳        ", end="", flush=True)
+        고객사탭 = [t for t in 것들
+                    if "smarta.wehago.com" in (t.get("url") or "") and "cd_com=" in (t.get("url") or "")]
 
-            for pg in pages:
-                조각 = 주소풀기(pg.url)
-                열쇠 = (조각["cd_com"],조각["gisu"])
-                if not 열쇠[0] or 열쇠 in 있는것:
-                    continue
-                이름, 기수 = "", ""
-                try:
-                    h = json.loads(pg.evaluate(HEADER))
-                    이름, 기수 = h.get("이름", ""), h.get("기수", "")
-                except Exception:
-                    pass
-                있는것[열쇠] = {
-                    "고객사명": 이름 or "(이름을 못 읽음)",
-                    "cd_com": 조각["cd_com"], "gisu": 조각["gisu"],
-                    "cno": 조각["cno"], "yminsa": 조각["yminsa"],
-                    "할것": "Y",
-                    "처음본때": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                }
-                차례.append(열쇠)
-                저장(있는것, 차례)
-                print(f"\r  {len(차례):>3}곳  {이름 or '(이름 못 읽음)'}"
-                      f"  {기수 or 조각['gisu'] + '기'}  {조각['cd_com']}"
-                      f"{' ' * 20}")
-                마지막알림 = 0.0
+        for t in 고객사탭:
+            조각 = 주소풀기(t.get("url") or "")
+            열쇠 = (조각["cd_com"], 조각["gisu"])
+            if not 열쇠[0] or 열쇠 in 있는것:
+                continue
+            이름, 기수제목 = 이름풀기(t.get("title"))
+            있는것[열쇠] = {
+                "고객사명": 이름 or "(이름을 못 읽음)",
+                "cd_com": 조각["cd_com"], "gisu": 조각["gisu"],
+                "cno": 조각["cno"], "yminsa": 조각["yminsa"],
+                "할것": "Y",
+                "처음본때": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            }
+            차례.append(열쇠)
+            저장(있는것, 차례)
+            print(f"\r  {len(차례):>3}곳  {이름 or '(이름 못 읽음)'}"
+                  f"  {(기수제목 or 조각['gisu'])}기  {조각['cd_com']}{' ' * 24}")
+            마지막알림 = 0.0
 
-            time.sleep(2)
+        지금 = time.time()
+        if 지금 - 마지막알림 >= 3:
+            마지막알림 = 지금
+            때 = datetime.datetime.now().strftime("%H:%M:%S")
+            print(f"\r  [{때}] 지켜보는 중   크롬 탭 {len(것들)}개"
+                  f"   그중 고객사 화면 {len(고객사탭)}개"
+                  f"   적은 곳 {len(차례)}곳        ", end="", flush=True)
+
+        time.sleep(2)
 
 except KeyboardInterrupt:
     print()
