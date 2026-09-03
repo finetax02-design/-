@@ -214,25 +214,34 @@ MENU_TYPE = r"""(args) => {
                           y: Math.round(r.y + r.height / 2) });
 }"""
 
-# 글자가 정확히 같은 것을 찾는다
-EXACT = r"""(args) => {
-  const out = [];
-  for (const el of document.querySelectorAll('button,a,li,span,div,[role=button],[role=menuitem]')) {
+# 검색칸 아래에 떠오른 메뉴 줄들을 있는 그대로 적는다.
+# 메뉴 이름의 일부만 표시(하이라이트)되므로 조각을 누르면 엉뚱한 데로 간다.
+# 예: 전자세금계산서발급세액공제신고서  <- '전자세금계산서' 만 따로 표시된다
+# 그래서 줄 통째의 글자를 보고 골라야 한다.
+MENU_ITEMS = r"""(args) => {
+  const 것들 = [];
+  for (const el of document.querySelectorAll('li,a,button,div,span,[role=menuitem]')) {
     if (el.offsetParent === null) continue;
-    const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
-    if (t !== args.text) continue;
-    let 안쪽 = true;
-    for (const c of el.children) {
-      const ct = (c.innerText || c.textContent || '').trim().replace(/\s+/g, ' ');
-      if (ct === args.text) { 안쪽 = false; break; }
-    }
-    if (!안쪽) continue;
     const r = el.getBoundingClientRect();
-    if (r.width < 5 || r.height < 5) continue;
-    out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
-               자리: `${Math.round(r.x)},${Math.round(r.y)}` });
+    if (r.y <= args.iy || r.y - args.iy > 500) continue;
+    if (Math.abs(r.x - args.ix) > 700) continue;
+    if (r.width < 40 || r.height < 12 || r.height > 60) continue;
+    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    if (!t || t.length > 50) continue;
+    것들.push({ 글자: t, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+                자리: `${Math.round(r.x)},${Math.round(r.y)}`,
+                너비: Math.round(r.width), 높이: Math.round(r.height) });
   }
-  return JSON.stringify(out.slice(0, 10));
+  // 같은 글자가 여러 겹으로 잡힌다. 줄마다 가장 넓은 것 하나만 남긴다.
+  const 남길것 = new Map();
+  for (const c of 것들) {
+    const 열쇠 = c.글자 + '|' + Math.round(c.y / 8);
+    const 앞 = 남길것.get(열쇠);
+    if (!앞 || c.너비 > 앞.너비) 남길것.set(열쇠, c);
+  }
+  const 결과 = [...남길것.values()];
+  결과.sort((a, b) => a.y - b.y);
+  return JSON.stringify(결과.slice(0, 20));
 }"""
 
 lines = []
@@ -390,40 +399,40 @@ try:
         say(f"  메뉴 검색칸에 [{r['값']}] 를 넣었습니다.")
         찾음.wait_for_timeout(2000)
 
-        고른것 = json.loads(찾음.evaluate(EXACT, {"text": "전자세금계산서"}))
-        say(f"  '전자세금계산서' 라고 적힌 것 {len(고른것)}개: "
-            + ", ".join(c["자리"] for c in 고른것))
+        줄들 = json.loads(찾음.evaluate(MENU_ITEMS, {"ix": r["x"], "iy": r["y"]}))
+        say(f"  검색칸({r['x']},{r['y']}) 아래에 떠오른 것 {len(줄들)}개:")
+        for c in 줄들:
+            say(f"    ({c['자리']}) {c['너비']}x{c['높이']}  [{c['글자']}]")
 
-        # 떠오르는 목록은 검색칸 바로 아래에 있다.
-        # 화면 안쪽에도 같은 글자가 있으므로 아무거나 누르면 안 된다.
-        아래것 = [c for c in 고른것
-                  if c["y"] > r["y"] and abs(c["x"] - r["x"]) < 500]
-        아래것.sort(key=lambda c: c["y"])
-        나머지 = [c for c in 고른것 if c not in 아래것]
-        차례대로 = 아래것 + 나머지
-        say(f"  검색칸({r['x']},{r['y']}) 아래에 있는 것 {len(아래것)}개."
-            f" 이것부터 눌러봅니다.")
+        딱맞는것 = [c for c in 줄들 if c["글자"] == "전자세금계산서"]
+        if not 딱맞는것:
+            say("")
+            say("  [멈춤] 글자가 딱 '전자세금계산서' 인 줄이 없습니다.")
+            say("  위 목록에서 어느 것을 눌러야 하는지 알려주세요.")
+            raise SystemExit
+        say(f"  글자가 딱 맞는 줄 {len(딱맞는것)}개. 위에서부터 눌러봅니다.")
 
         도착 = False
-        for 번째, c in enumerate(차례대로, 1):
+        for 번째, c in enumerate(딱맞는것, 1):
             if 도착:
                 break
-            say(f"  [{번째}] ({c['자리']}) 를 눌러봅니다.")
+            say(f"  [{번째}] ({c['자리']}) [{c['글자']}] 를 눌러봅니다.")
             찾음.mouse.click(c["x"], c["y"])
-            for 지난 in range(0, 12, 3):
+            for 지난 in range(0, 15, 3):
                 찾음.wait_for_timeout(3000)
+                # 주소는 안 바뀌기도 한다. 전표 목록이 잡히는지로 본다.
                 try:
                     d = json.loads(찾음.evaluate(GRAB))
-                    건수 = len(d.get("rows") or []) if d.get("ok") else -1
+                    잡혔나 = bool(d.get("ok"))
+                    건수 = len(d.get("rows") or [])
                 except Exception:
-                    건수 = -1
-                say(f"      {지난 + 3:>3}초  주소 {찾음.url.split('/#/')[-1][:56]}"
-                    f"  전표 {건수}건")
-                if "SAAC0103" in 찾음.url:
+                    잡혔나, 건수 = False, -1
+                say(f"      {지난 + 3:>3}초  전표목록 {'잡힘' if 잡혔나 else '못 잡음'}"
+                    f"  {건수}건  주소 {찾음.url.split('/#/')[-1][:44]}")
+                if 잡혔나:
                     도착 = True
                     break
-            if not 도착 and 번째 < len(차례대로):
-                # 다음 것을 누르려면 목록이 다시 떠 있어야 한다
+            if not 도착 and 번째 < len(딱맞는것):
                 r2 = json.loads(찾음.evaluate(MENU_TYPE, {"글": "전자세금계산서"}))
                 if r2.get("ok"):
                     찾음.wait_for_timeout(1500)
@@ -435,6 +444,7 @@ try:
             say("===== 됩니다 =====")
             say("  수임처에서 회계를 눌러 고객사를 열고,")
             say("  메뉴로 전자세금계산서까지 갈 수 있습니다.")
+            say("  화면도 봐주세요. 전자세금계산서 화면이 맞는지.")
         else:
             say("===== 전자세금계산서까지는 아직 =====")
             say(f"  지금 주소: {찾음.url[:130]}")
