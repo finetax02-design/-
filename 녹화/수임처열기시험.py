@@ -390,6 +390,30 @@ GRIDS_DUMP = r"""() => {
   return JSON.stringify({ 본것: visited, 그리드: 나온것.slice(0, 8) });
 }"""
 
+# 글자가 들어 있는 것을 화면 어디서든 찾는다. 목록이 딴 데 그려질 수 있다.
+LIKE = r"""(args) => {
+  const out = [];
+  for (const el of document.querySelectorAll('*')) {
+    if (el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) continue;
+    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    if (!t || t.length > 30 || !t.includes(args.글)) continue;
+    let 안쪽 = true;
+    for (const c of el.children) {
+      const ct = (c.innerText || '').trim().replace(/\s+/g, ' ');
+      if (ct === t) { 안쪽 = false; break; }
+    }
+    if (!안쪽) continue;
+    out.push({ 글자: t, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+               왼쪽: Math.round(r.x), 오른쪽: Math.round(r.x + r.width),
+               가운데y: Math.round(r.y + r.height / 2),
+               너비: Math.round(r.width), 높이: Math.round(r.height),
+               자리: `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}` });
+  }
+  return JSON.stringify(out.slice(0, 25));
+}"""
+
 lines = []
 
 
@@ -634,36 +658,55 @@ try:
             say("  단추: " + ", ".join(q["단추"]))
 
             # 구분이 1.매출 로 열린다. 매입으로 바꿔야 우리가 볼 자료가 나온다.
+            # 구분 칸은 '1. 매출 리스트 열기' 한 덩어리이고
+            # 목록을 여는 것은 오른쪽 끝 화살표다. 글자 한가운데를 누르면 안 열린다.
             say("")
             say("===== 구분을 2. 매입 으로 =====")
-            지금구분 = [b for b in json.loads(화면.evaluate(BTN, {"text": "1. 매출"}))]
-            이미매입 = json.loads(화면.evaluate(BTN, {"text": "2. 매입"}))
-            if 이미매입 and not 지금구분:
+            이미 = json.loads(화면.evaluate(LIKE, {"글": "2. 매입"}))
+            if 이미:
                 say("  이미 2. 매입 입니다.")
-            elif not 지금구분:
-                say("  구분 칸을 못 찾았습니다. 지금 조회 줄:")
-                q2 = json.loads(화면.evaluate(QUERY_BOX))
-                say("  단추: " + ", ".join(q2["단추"]))
             else:
-                say(f"  구분 칸 ({지금구분[0]['자리']}) 을 눌러 목록을 엽니다.")
-                화면.mouse.click(지금구분[0]["x"], 지금구분[0]["y"])
-                화면.wait_for_timeout(1500)
-                고를것 = None
-                for 글 in ("2. 매입", "2.매입", "매입"):
-                    것 = json.loads(화면.evaluate(BTN, {"text": 글}))
-                    if 것:
-                        고를것 = (글, 것[0])
-                        break
-                if not 고를것:
-                    say("  목록에서 매입을 못 찾았습니다. 지금 보이는 것:")
-                    q2 = json.loads(화면.evaluate(QUERY_BOX))
-                    say("  단추: " + ", ".join(q2["단추"]))
+                덩어리 = [c for c in json.loads(화면.evaluate(LIKE, {"글": "1. 매출"}))
+                          if "리스트" in c["글자"] or c["너비"] > 80]
+                모두 = json.loads(화면.evaluate(LIKE, {"글": "1. 매출"}))
+                say("  구분 칸 후보:")
+                for c in 모두:
+                    say(f"    ({c['자리']}) [{c['글자']}]")
+                덩어리 = 덩어리 or 모두
+                if not 덩어리:
+                    say("  구분 칸을 못 찾았습니다.")
                 else:
-                    say(f"  [{고를것[0]}] ({고를것[1]['자리']}) 를 누릅니다.")
-                    화면.mouse.click(고를것[1]["x"], 고를것[1]["y"])
-                    화면.wait_for_timeout(1500)
-                    확인 = json.loads(화면.evaluate(BTN, {"text": "2. 매입"}))
-                    say(f"  이제 구분이 2. 매입 {'맞습니다' if 확인 else '아닙니다'}")
+                    덩어리.sort(key=lambda c: -c["너비"])
+                    큰것 = 덩어리[0]
+                    누를곳 = [
+                        ("오른쪽 끝 화살표", 큰것["오른쪽"] - 10, 큰것["가운데y"]),
+                        ("한가운데", 큰것["x"], 큰것["y"]),
+                    ]
+                    골랐나 = False
+                    for 어디, x, y in 누를곳:
+                        if 골랐나:
+                            break
+                        say(f"  {어디} ({x},{y}) 를 눌러 목록을 엽니다.")
+                        화면.mouse.click(x, y)
+                        화면.wait_for_timeout(1800)
+                        것들 = json.loads(화면.evaluate(LIKE, {"글": "매입"}))
+                        say(f"    '매입' 이 든 것 {len(것들)}개: "
+                            + ", ".join(f"({c['자리']})[{c['글자']}]" for c in 것들[:8]))
+                        고를것 = [c for c in 것들
+                                  if c["글자"] in ("2. 매입", "2.매입", "매입")]
+                        if not 고를것:
+                            continue
+                        고를것.sort(key=lambda c: c["y"])
+                        say(f"    [{고를것[0]['글자']}] ({고를것[0]['자리']}) 를 누릅니다.")
+                        화면.mouse.click(고를것[0]["x"], 고를것[0]["y"])
+                        화면.wait_for_timeout(1800)
+                        확인 = json.loads(화면.evaluate(LIKE, {"글": "2. 매입"}))
+                        say(f"    이제 구분이 2. 매입 {'맞습니다' if 확인 else '아닙니다'}")
+                        골랐나 = bool(확인)
+                    if not 골랐나:
+                        say("  [멈춤] 구분을 매입으로 못 바꿨습니다. 조회를 누르지 않습니다.")
+                        say("  매출 자료를 건드리면 안 되므로 여기서 멈춥니다.")
+                        raise SystemExit
 
             say("")
             say("===== 조회 눌러보기 =====")
