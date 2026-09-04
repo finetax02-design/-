@@ -49,6 +49,37 @@ CALENDAR = r"""(args) => {
   return JSON.stringify(것들.slice(0, 90));
 }"""
 
+# 달력 안에 있는 것을 거르지 않고 다 적는다. 월을 옮기는 것을 찾으려는 것이다.
+INSIDE = r"""() => {
+  const 달력들 = [...document.querySelectorAll('[class*=calendar],[class*=Calendar]')]
+    .filter(el => el.offsetParent !== null && el.getBoundingClientRect().width > 100);
+  const out = [];
+  달력들.forEach((cal, ci) => {
+    const cr = cal.getBoundingClientRect();
+    out.push({ 어느것: ci, 무엇: '달력틀',
+               자리: `${Math.round(cr.x)},${Math.round(cr.y)} ${Math.round(cr.width)}x${Math.round(cr.height)}`,
+               태그: cal.tagName.toLowerCase(),
+               cls: (cal.className || '').toString().slice(0, 44), 글자: '', 딸린것: '' });
+    for (const el of cal.querySelectorAll('button,a,[role=button],svg,i,span,strong')) {
+      if (el.offsetParent === null) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 6 || r.height < 6) continue;
+      const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+      if (t.length > 12) continue;
+      const 딸린것 = ['title', 'aria-label', 'alt', 'data-testid']
+        .map(k => el.getAttribute(k)).filter(Boolean).join(' / ');
+      // 날짜 숫자는 너무 많으니 뺀다
+      if (/^\d{1,2}$/.test(t) && !딸린것) continue;
+      out.push({ 어느것: ci, 무엇: el.tagName.toLowerCase(),
+                 자리: `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`,
+                 태그: el.tagName.toLowerCase(),
+                 cls: (el.className || '').toString().slice(0, 44),
+                 글자: t, 딸린것: 딸린것 });
+    }
+  });
+  return JSON.stringify(out.slice(0, 60));
+}"""
+
 lines = []
 
 
@@ -113,8 +144,39 @@ try:
             say("  아무것도 안 열렸습니다.")
 
         say("")
-        say("  달력을 열어 보기만 했습니다. 날짜는 고르지 않았습니다.")
-        say("  화면에 달력이 떠 있으면 esc 나 빈 곳을 눌러 닫아주세요.")
+        say("===== 달력 안에 있는 것 (거르지 않고) =====")
+        안것 = json.loads(page.evaluate(INSIDE))
+        for c in 안것:
+            say(f"  [{c['어느것']}] ({c['자리']}) <{c['태그']} class=\"{c['cls']}\">"
+                f"  글자[{c['글자']}]" + (f"  딸린것[{c['딸린것']}]" if c["딸린것"] else ""))
+
+        # 월을 옮기는 것이 안 보이면 제목을 눌러 본다
+        제목 = [c for c in 안것 if "date_day_title" in c["cls"]]
+        if 제목:
+            자리 = 제목[0]["자리"].split()[0].split(",")
+            x, y = int(자리[0]) + 20, int(자리[1]) + 12
+            say("")
+            say(f"===== 왼쪽 제목 ({x},{y}) 을 눌러봅니다 =====")
+            page.mouse.click(x, y)
+            page.wait_for_timeout(1200)
+            뒤2 = json.loads(page.evaluate(INSIDE))
+            앞2 = {(c["글자"], c["자리"]) for c in 안것}
+            새것2 = [c for c in 뒤2 if (c["글자"], c["자리"]) not in 앞2]
+            say(f"  새로 생긴 것 {len(새것2)}개:")
+            for c in 새것2[:30]:
+                say(f"    ({c['자리']}) <{c['태그']} class=\"{c['cls']}\">  글자[{c['글자']}]")
+            if not 새것2:
+                say("    제목을 눌러도 아무것도 안 열립니다.")
+
+        say("")
+        say("===== 취소를 눌러 닫습니다 =====")
+        if 공통.누르기(page, "취소"):
+            say("  취소를 눌렀습니다.")
+        else:
+            say("  취소를 못 찾았습니다. 화면에서 손으로 닫아주세요.")
+
+        say("")
+        say("  날짜는 고르지 않았습니다.")
         browser.close()
 
 except SystemExit:
