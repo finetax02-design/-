@@ -992,6 +992,43 @@ SET_DATE_INPUT = r"""(args) => {
 }"""
 
 
+# 달력 안을 읽는다. 왼쪽이 시작, 오른쪽이 끝이다.
+# 단추는 글자로 알아본다. 이전년, 이전달, 다음달, 다음년.
+CAL_INFO = r"""() => {
+  const 보임 = el => {
+    if (el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 4 && r.height > 4;
+  };
+  const 달력들 = [...document.querySelectorAll('.LUX_smart_calendar')].filter(보임);
+  달력들.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
+  const out = [];
+  for (const cal of 달력들) {
+    const 제목el = cal.querySelector('.date_day_title');
+    const 제목 = 제목el ? (제목el.innerText || '').trim() : '';
+    const 단추 = {};
+    for (const b of cal.querySelectorAll('button')) {
+      if (!보임(b)) continue;
+      const t = (b.innerText || '').trim();
+      if (!t) continue;
+      const r = b.getBoundingClientRect();
+      단추[t] = { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    }
+    const 날짜들 = [];
+    for (const sp of cal.querySelectorAll('span')) {
+      if (!보임(sp)) continue;
+      const t = (sp.innerText || '').trim();
+      if (!/^\d{1,2}$/.test(t)) continue;
+      const r = sp.getBoundingClientRect();
+      날짜들.push({ 날: t, x: Math.round(r.x + r.width / 2),
+                    y: Math.round(r.y + r.height / 2) });
+    }
+    out.push({ 제목: 제목, 단추: 단추, 날짜들: 날짜들 });
+  }
+  return JSON.stringify(out);
+}"""
+
+
 def 기간계산(연도, 무엇):
     """분기와 반기를 날짜로 바꾼다. 돌려주는 것: (시작, 끝) 여덟 자리."""
     표 = {
@@ -1016,60 +1053,81 @@ def 회계연도(page):
 def _날짜읽기(page, 몇번째):
     칸들 = json.loads(page.evaluate(DATE_BOXES))
     if len(칸들) < 2:
-        return None, None
+        return None
     글 = 칸들[몇번째]["글자"].splitlines()[0]
-    return re.sub(r"\D", "", 글)[:8], 칸들[몇번째]
+    return re.sub(r"\D", "", 글)[:8]
 
 
 def 기간설정(page, 시작, 끝, 말하기):
-    """조회 기간을 정한다. 여덟 자리 두 개. 돌려주는 것: (되었나, 까닭)
+    """조회 기간을 달력으로 정한다. 여덟 자리 두 개.
 
-    기간 칸은 평소에는 글자이고 누르면 마스크가 걸린 입력칸으로 바뀐다.
-    치는 것으로는 어그러진다. 첫 글자를 치는 순간 입력칸이 새로 만들어지면서
-    뒤이은 글자들이 흘러버리기 때문이다.
-    그래서 입력칸이 뜬 뒤에 값을 직접 넣어 본다. 그것도 안 되면 천천히 친다.
+    글자로 넣는 길은 막혔다. 천천히 쳐도 안 들어가고, 값을 직접 넣어도
+    되돌아간다. 사유 라디오와 같이 부품이 제 상태를 따로 들고 있기 때문이다.
+
+    달력은 사람이 하는 그대로라 되돌아갈 일이 없다.
+    달력 하나에 시작과 끝 두 개가 나란히 뜬다. 왼쪽이 시작, 오른쪽이 끝이다.
+    연월은 이전년, 이전달, 다음달, 다음년 단추로 옮긴다.
+
+    돌려주는 것: (되었나, 까닭)
     """
-    for 몇번째, 값 in ((0, 시작), (1, 끝)):
-        어디 = "시작" if 몇번째 == 0 else "끝"
-        앞, 칸 = _날짜읽기(page, 몇번째)
-        if 칸 is None:
-            return False, "기간 칸을 두 개 못 찾음"
-        if 앞 == 값:
-            말하기(f"    기간 {어디}: 이미 {값}")
-            continue
+    지금 = [_날짜읽기(page, 0), _날짜읽기(page, 1)]
+    if 지금[0] == 시작 and 지금[1] == 끝:
+        말하기(f"    기간 이미 {시작} ~ {끝}")
+        return True, ""
 
-        됐나 = False
-        for 방법 in ("직접넣기", "천천히치기"):
-            if 됐나:
+    단추 = json.loads(page.evaluate(BTN, {"글": "달력 열기"}))
+    if not 단추:
+        return False, "달력 열기 단추를 못 찾음"
+    단추.sort(key=lambda c: c["x"])
+    page.mouse.click(단추[0]["x"], 단추[0]["y"])
+    page.wait_for_timeout(1200)
+
+    for 쪽, 값 in ((0, 시작), (1, 끝)):
+        어디 = "시작" if 쪽 == 0 else "끝"
+        목표 = f"{값[:4]}.{값[4:6]}"
+        옮긴횟수 = 0
+        while True:
+            달력 = json.loads(page.evaluate(CAL_INFO))
+            if len(달력) < 2:
+                return False, f"달력이 두 개로 안 보임 ({len(달력)}개)"
+            지금제목 = 달력[쪽]["제목"]
+            if 지금제목 == 목표:
                 break
-            # 오른쪽 끝에는 달력 단추가 있다. 왼쪽을 눌러야 글자 칸이 열린다.
-            page.mouse.click(칸["x"] + 20, 칸["가운데y"])
-            page.wait_for_timeout(700)
-            # 첫 글자를 쳐야 글자 칸으로 바뀐다
-            page.keyboard.press(값[0])
-            page.wait_for_timeout(900)
+            if 옮긴횟수 > 80:
+                return False, f"{어디} 달력을 {목표} 로 못 옮김 (지금 {지금제목})"
+            m = re.match(r"(\d{4})\.(\d{2})", 지금제목 or "")
+            if not m:
+                return False, f"{어디} 달력 제목을 못 읽음 [{지금제목}]"
+            이해, 이달 = int(m.group(1)), int(m.group(2))
+            갈해, 갈달 = int(값[:4]), int(값[4:6])
+            이름 = ("이전년" if 이해 > 갈해 else "다음년") if 이해 != 갈해 else \
+                   ("이전달" if 이달 > 갈달 else "다음달")
+            자리 = 달력[쪽]["단추"].get(이름)
+            if not 자리:
+                return False, f"{어디} 달력에 '{이름}' 단추가 없음"
+            page.mouse.click(자리["x"], 자리["y"])
+            page.wait_for_timeout(400)
+            옮긴횟수 += 1
 
-            if 방법 == "직접넣기":
-                꼴 = f"{값[:4]}-{값[4:6]}-{값[6:]}"
-                r = json.loads(page.evaluate(SET_DATE_INPUT,
-                                             {"x": 칸["x"], "y": 칸["가운데y"], "값": 꼴}))
-                if not r.get("ok"):
-                    말하기(f"    기간 {어디} {방법}: {r.get('reason')}")
-                    continue
-            else:
-                page.keyboard.press("Control+a")
-                page.wait_for_timeout(200)
-                for 글자 in 값[1:]:
-                    page.keyboard.press(글자)
-                    page.wait_for_timeout(150)
-            page.keyboard.press("Tab")
-            page.wait_for_timeout(1200)
+        달력 = json.loads(page.evaluate(CAL_INFO))
+        날짜들 = 달력[쪽]["날짜들"]
+        # 앞머리에는 지난달 끝자락이 붙어 있다. 처음 나오는 1 이 이달 1일이다.
+        첫하루 = next((i for i, d in enumerate(날짜들) if d["날"] == "1"), None)
+        if 첫하루 is None:
+            return False, f"{어디} 달력에서 1일을 못 찾음"
+        자리번호 = 첫하루 + int(값[6:]) - 1
+        if not (0 <= 자리번호 < len(날짜들)) or 날짜들[자리번호]["날"] != str(int(값[6:])):
+            return False, f"{어디} 달력에서 {int(값[6:])}일을 못 찾음"
+        page.mouse.click(날짜들[자리번호]["x"], 날짜들[자리번호]["y"])
+        page.wait_for_timeout(600)
+        말하기(f"    기간 {어디}: 달력에서 {목표}.{값[6:]} 고름")
 
-            뒤, _ = _날짜읽기(page, 몇번째)
-            말하기(f"    기간 {어디} {방법}: {앞} -> {뒤}")
-            됐나 = 뒤 == 값
+    if not 누르기(page, "확인"):
+        return False, "달력의 확인을 못 찾음"
+    page.wait_for_timeout(1200)
 
-        if not 됐나:
-            뒤, _ = _날짜읽기(page, 몇번째)
-            return False, f"{어디} 날짜가 {뒤} 로 남았습니다 (바란 것 {값})"
+    끝난것 = [_날짜읽기(page, 0), _날짜읽기(page, 1)]
+    말하기(f"    기간 {끝난것[0]} ~ {끝난것[1]}")
+    if 끝난것[0] != 시작 or 끝난것[1] != 끝:
+        return False, f"기간이 {끝난것[0]} ~ {끝난것[1]} 로 들어갔습니다 (바란 것 {시작} ~ {끝})"
     return True, ""
