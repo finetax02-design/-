@@ -970,6 +970,28 @@ DATE_BOXES = r"""() => {
 }"""
 
 
+# 그 자리에 있는 보이는 입력칸에 값을 직접 넣는다.
+# 치는 것으로는 마스크 때문에 어그러진다.
+SET_DATE_INPUT = r"""(args) => {
+  let 표적 = null;
+  for (const el of document.querySelectorAll('input')) {
+    if (el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (Math.abs(r.x - args.x) > 40 || Math.abs(r.y - args.y) > 30) continue;
+    표적 = el;
+    break;
+  }
+  if (!표적) return JSON.stringify({ ok: false, reason: '그 자리에 입력칸이 없음' });
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value').set;
+  setter.call(표적, args.값);
+  표적.dispatchEvent(new Event('input', { bubbles: true }));
+  표적.dispatchEvent(new Event('change', { bubbles: true }));
+  return JSON.stringify({ ok: true, 값: 표적.value,
+                          cls: (표적.className || '').toString().slice(0, 30) });
+}"""
+
+
 def 기간계산(연도, 무엇):
     """분기와 반기를 날짜로 바꾼다. 돌려주는 것: (시작, 끝) 여덟 자리."""
     표 = {
@@ -991,31 +1013,63 @@ def 회계연도(page):
     return m.group(1) if m else ""
 
 
-def 기간설정(page, 시작, 끝, 말하기):
-    """조회 기간을 정한다. 여덟 자리 두 개. 돌려주는 것: (되었나, 까닭)"""
-    for 몇번째, 값 in ((0, 시작), (1, 끝)):
-        칸들 = json.loads(page.evaluate(DATE_BOXES))
-        if len(칸들) < 2:
-            return False, f"기간 칸을 두 개 못 찾음 ({len(칸들)}개)"
-        칸 = 칸들[몇번째]
-        # 오른쪽 끝에는 달력 단추가 있다. 왼쪽을 눌러야 글자를 칠 수 있다.
-        page.mouse.click(칸["x"] + 20, 칸["가운데y"])
-        page.wait_for_timeout(700)
-        page.keyboard.press("Control+a")
-        page.wait_for_timeout(200)
-        # 마스크가 걸려 있어 빨리 치면 어그러진다. 한 자씩 천천히.
-        for 글자 in 값:
-            page.keyboard.press(글자)
-            page.wait_for_timeout(120)
-        page.keyboard.press("Tab")
-        page.wait_for_timeout(1000)
+def _날짜읽기(page, 몇번째):
+    칸들 = json.loads(page.evaluate(DATE_BOXES))
+    if len(칸들) < 2:
+        return None, None
+    글 = 칸들[몇번째]["글자"].splitlines()[0]
+    return re.sub(r"\D", "", 글)[:8], 칸들[몇번째]
 
-        확인 = json.loads(page.evaluate(DATE_BOXES))
-        if len(확인) < 2:
-            return False, "기간을 넣은 뒤 칸을 못 읽음"
-        들어간것 = re.sub(r"\D", "", 확인[몇번째]["글자"])[:8]
+
+def 기간설정(page, 시작, 끝, 말하기):
+    """조회 기간을 정한다. 여덟 자리 두 개. 돌려주는 것: (되었나, 까닭)
+
+    기간 칸은 평소에는 글자이고 누르면 마스크가 걸린 입력칸으로 바뀐다.
+    치는 것으로는 어그러진다. 첫 글자를 치는 순간 입력칸이 새로 만들어지면서
+    뒤이은 글자들이 흘러버리기 때문이다.
+    그래서 입력칸이 뜬 뒤에 값을 직접 넣어 본다. 그것도 안 되면 천천히 친다.
+    """
+    for 몇번째, 값 in ((0, 시작), (1, 끝)):
         어디 = "시작" if 몇번째 == 0 else "끝"
-        말하기(f"    기간 {어디}: {확인[몇번째]['글자'].splitlines()[0]}")
-        if 들어간것 != 값:
-            return False, f"{어디} 날짜가 {들어간것} 로 들어갔습니다 (바란 것 {값})"
+        앞, 칸 = _날짜읽기(page, 몇번째)
+        if 칸 is None:
+            return False, "기간 칸을 두 개 못 찾음"
+        if 앞 == 값:
+            말하기(f"    기간 {어디}: 이미 {값}")
+            continue
+
+        됐나 = False
+        for 방법 in ("직접넣기", "천천히치기"):
+            if 됐나:
+                break
+            # 오른쪽 끝에는 달력 단추가 있다. 왼쪽을 눌러야 글자 칸이 열린다.
+            page.mouse.click(칸["x"] + 20, 칸["가운데y"])
+            page.wait_for_timeout(700)
+            # 첫 글자를 쳐야 글자 칸으로 바뀐다
+            page.keyboard.press(값[0])
+            page.wait_for_timeout(900)
+
+            if 방법 == "직접넣기":
+                꼴 = f"{값[:4]}-{값[4:6]}-{값[6:]}"
+                r = json.loads(page.evaluate(SET_DATE_INPUT,
+                                             {"x": 칸["x"], "y": 칸["가운데y"], "값": 꼴}))
+                if not r.get("ok"):
+                    말하기(f"    기간 {어디} {방법}: {r.get('reason')}")
+                    continue
+            else:
+                page.keyboard.press("Control+a")
+                page.wait_for_timeout(200)
+                for 글자 in 값[1:]:
+                    page.keyboard.press(글자)
+                    page.wait_for_timeout(150)
+            page.keyboard.press("Tab")
+            page.wait_for_timeout(1200)
+
+            뒤, _ = _날짜읽기(page, 몇번째)
+            말하기(f"    기간 {어디} {방법}: {앞} -> {뒤}")
+            됐나 = 뒤 == 값
+
+        if not 됐나:
+            뒤, _ = _날짜읽기(page, 몇번째)
+            return False, f"{어디} 날짜가 {뒤} 로 남았습니다 (바란 것 {값})"
     return True, ""
