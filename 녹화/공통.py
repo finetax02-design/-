@@ -20,6 +20,8 @@ CDP = "http://localhost:9222"
 과세 = "51"
 불공 = "54"
 미추천 = "5"
+확정가능 = "1"
+전표확정 = "2"   # 이미 전송된 줄. 건드리면 안 된다.
 사유이름 = {"3": "비영업용승용차유지", "4": "면세사업관련", "5": "공통매입세액안분"}
 
 NOISE = [re.compile(r"\(오더번호[^)]*\)"), re.compile(r"\(\d[^)]*\)"),
@@ -677,17 +679,24 @@ def 불공전환(page, 규칙, 말하기):
         if rows is None:
             결과["멈춤"] = "전표 목록을 못 읽음"
             return 결과
-        대상, 본보기 = [], []
+        대상, 본보기, 전송됨 = [], [], 0
         for i, r in enumerate(rows):
             ty = str(r.get("ty_mth2") or "")
             cd = str(r.get("cd_notdedct") or "")
             biz = str(r.get("no_bisocial") or "")
+            상태 = str(r.get("ty_jungstat") or "")
             if ty == 불공 and cd == 사유:
                 # 규칙과 어긋나는 줄은 본보기로 쓰지 않는다
                 if 규칙.get(biz) in (None, 사유):
                     본보기.append(i)
             elif ty == 과세 and 규칙.get(biz) == 사유:
+                # 이미 전송된 줄은 일괄변경으로 못 바꾸고, 건드려서도 안 된다.
+                if 상태 == 전표확정:
+                    전송됨 += 1
+                    continue
                 대상.append(i)
+        if 전송됨:
+            말하기(f"    사유 {사유}: 이미 전송된 {전송됨}건은 건드리지 않습니다")
         if not 대상:
             continue
         if not 본보기:
