@@ -348,6 +348,48 @@ BTN = r"""(args) => {
   return JSON.stringify(out.slice(0, 8));
 }"""
 
+# 화면에 어떤 그리드가 있는지 다 훑는다. 못 찾을 때 무엇이 있었는지 알려고.
+GRIDS_DUMP = r"""() => {
+  const gridish = o => {
+    if (!o || (typeof o !== 'object' && typeof o !== 'function')) return false;
+    try { return typeof o.getColumns === 'function' && typeof o.getValues === 'function'; }
+    catch (e) { return false; }
+  };
+  const 나온것 = [];
+  const seen = new WeakSet();
+  const queue = [{ o: window, d: 0 }];
+  const SKIP = /^(document|location|navigator|parent|top|self|frames|history|localStorage|sessionStorage|indexedDB|caches|crypto)$/;
+  let visited = 0;
+  while (queue.length && visited < 60000) {
+    const { o, d } = queue.shift();
+    if (d > 9) continue;
+    let keys = [];
+    try { keys = Object.keys(o); } catch (e) { continue; }
+    for (const k of keys) {
+      if (d === 0 && SKIP.test(k)) continue;
+      let v;
+      try { v = o[k]; } catch (e) { continue; }
+      if (!v || (typeof v !== 'object' && typeof v !== 'function')) continue;
+      try { if (v.nodeType || v === window) continue; } catch (e) { continue; }
+      try { if (seen.has(v)) continue; seen.add(v); } catch (e) { continue; }
+      visited++;
+      if (gridish(v)) {
+        let names = [];
+        try { names = v.getColumns().map(c => String(c.name || c.fieldName || '')); } catch (e) {}
+        let n = 0;
+        try {
+          let src = v;
+          try { const dp = v.getDataSource(); if (dp) src = dp; } catch (e) {}
+          n = src.getRowCount() || 0;
+        } catch (e) {}
+        나온것.push({ 건수: n, 열수: names.length, 열: names.slice(0, 14) });
+      }
+      if (d < 9) queue.push({ o: v, d: d + 1 });
+    }
+  }
+  return JSON.stringify({ 본것: visited, 그리드: 나온것.slice(0, 8) });
+}"""
+
 lines = []
 
 
@@ -591,6 +633,38 @@ try:
                 say("  입력: " + t)
             say("  단추: " + ", ".join(q["단추"]))
 
+            # 구분이 1.매출 로 열린다. 매입으로 바꿔야 우리가 볼 자료가 나온다.
+            say("")
+            say("===== 구분을 2. 매입 으로 =====")
+            지금구분 = [b for b in json.loads(화면.evaluate(BTN, {"text": "1. 매출"}))]
+            이미매입 = json.loads(화면.evaluate(BTN, {"text": "2. 매입"}))
+            if 이미매입 and not 지금구분:
+                say("  이미 2. 매입 입니다.")
+            elif not 지금구분:
+                say("  구분 칸을 못 찾았습니다. 지금 조회 줄:")
+                q2 = json.loads(화면.evaluate(QUERY_BOX))
+                say("  단추: " + ", ".join(q2["단추"]))
+            else:
+                say(f"  구분 칸 ({지금구분[0]['자리']}) 을 눌러 목록을 엽니다.")
+                화면.mouse.click(지금구분[0]["x"], 지금구분[0]["y"])
+                화면.wait_for_timeout(1500)
+                고를것 = None
+                for 글 in ("2. 매입", "2.매입", "매입"):
+                    것 = json.loads(화면.evaluate(BTN, {"text": 글}))
+                    if 것:
+                        고를것 = (글, 것[0])
+                        break
+                if not 고를것:
+                    say("  목록에서 매입을 못 찾았습니다. 지금 보이는 것:")
+                    q2 = json.loads(화면.evaluate(QUERY_BOX))
+                    say("  단추: " + ", ".join(q2["단추"]))
+                else:
+                    say(f"  [{고를것[0]}] ({고를것[1]['자리']}) 를 누릅니다.")
+                    화면.mouse.click(고를것[1]["x"], 고를것[1]["y"])
+                    화면.wait_for_timeout(1500)
+                    확인 = json.loads(화면.evaluate(BTN, {"text": "2. 매입"}))
+                    say(f"  이제 구분이 2. 매입 {'맞습니다' if 확인 else '아닙니다'}")
+
             say("")
             say("===== 조회 눌러보기 =====")
             단추 = json.loads(화면.evaluate(BTN, {"text": "조회"}))
@@ -599,7 +673,8 @@ try:
                 say("  조회 단추를 못 찾았습니다.")
             else:
                 화면.mouse.click(단추[0]["x"], 단추[0]["y"])
-                for 지난 in range(0, 20, 4):
+                떴나 = False
+                for 지난 in range(0, 24, 4):
                     화면.wait_for_timeout(4000)
                     try:
                         g = json.loads(화면.evaluate(GRID_FOUND))
@@ -608,7 +683,18 @@ try:
                     say(f"    {지난 + 4:>3}초  전표목록 틀"
                         f" {'있음' if g['찾음'] else '없음'}  자료 {g['건수']}건")
                     if g["건수"] > 0:
+                        떴나 = True
                         break
+                if not 떴나:
+                    say("")
+                    say("  자료가 안 뜹니다. 이 화면에 있는 그리드를 다 훑어봅니다.")
+                    try:
+                        gd = json.loads(화면.evaluate(GRIDS_DUMP))
+                        say(f"  {gd['본것']}개를 훑어 그리드 {len(gd['그리드'])}개:")
+                        for g2 in gd["그리드"]:
+                            say(f"    {g2['건수']}건  열 {g2['열수']}개: {', '.join(g2['열'])}")
+                    except Exception as e:
+                        say(f"  훑기 실패 {str(e)[:80]}")
 
         say("")
         if 도착:
