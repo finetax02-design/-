@@ -936,3 +936,86 @@ def 매입조회(page, 말하기):
             말하기(f"    조회 {len(rows)}건")
             return len(rows), ""
     return 0, ""
+
+
+# ---------------------------------------------------------------- 조회 기간
+#
+# 기간 칸은 평소에는 글자다.
+#   <span class="fakeinput">2026.01.01</span>  이 <div class="fake_inputbox"> 안에 있다
+# 누르면 그 div 에 포커스가 가고, 글자를 치기 시작하면
+#   <input class="LSinput"> 로 바뀐다. ____-__-__ 꼴 마스크가 걸려 있다.
+# 빨리 치면 값이 어그러진다. 한 자씩 천천히 쳐야 한다.
+
+DATE_BOXES = r"""() => {
+  const out = [];
+  const 담은것 = new Set();
+  for (const el of document.querySelectorAll('div,span')) {
+    if (el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.y > 300 || r.width < 40 || r.height < 10) continue;
+    const cls = (el.className || '').toString();
+    if (!/fake_inputbox/.test(cls)) continue;
+    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+    const 열쇠 = Math.round(r.x) + ',' + Math.round(r.y);
+    if (담은것.has(열쇠)) continue;
+    담은것.add(열쇠);
+    out.push({ 글자: t.slice(0, 24),
+               x: Math.round(r.x), y: Math.round(r.y),
+               너비: Math.round(r.width), 높이: Math.round(r.height),
+               가운데y: Math.round(r.y + r.height / 2),
+               자리: `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}` });
+  }
+  out.sort((a, b) => a.x - b.x);
+  return JSON.stringify(out.slice(0, 6));
+}"""
+
+
+def 기간계산(연도, 무엇):
+    """분기와 반기를 날짜로 바꾼다. 돌려주는 것: (시작, 끝) 여덟 자리."""
+    표 = {
+        "1분기": ("0101", "0331"), "2분기": ("0401", "0630"),
+        "3분기": ("0701", "0930"), "4분기": ("1001", "1231"),
+        "상반기": ("0101", "0630"), "하반기": ("0701", "1231"),
+        "올해전체": ("0101", "1231"),
+    }
+    if 무엇 not in 표:
+        return None, None
+    가, 나 = 표[무엇]
+    return f"{연도}{가}", f"{연도}{나}"
+
+
+def 회계연도(page):
+    """화면 위쪽의 회계기간에서 연도를 얻는다. 고객사마다 다르다."""
+    h = 화면머리(page)
+    m = re.search(r"(\d{4})", h.get("기간") or "")
+    return m.group(1) if m else ""
+
+
+def 기간설정(page, 시작, 끝, 말하기):
+    """조회 기간을 정한다. 여덟 자리 두 개. 돌려주는 것: (되었나, 까닭)"""
+    for 몇번째, 값 in ((0, 시작), (1, 끝)):
+        칸들 = json.loads(page.evaluate(DATE_BOXES))
+        if len(칸들) < 2:
+            return False, f"기간 칸을 두 개 못 찾음 ({len(칸들)}개)"
+        칸 = 칸들[몇번째]
+        # 오른쪽 끝에는 달력 단추가 있다. 왼쪽을 눌러야 글자를 칠 수 있다.
+        page.mouse.click(칸["x"] + 20, 칸["가운데y"])
+        page.wait_for_timeout(700)
+        page.keyboard.press("Control+a")
+        page.wait_for_timeout(200)
+        # 마스크가 걸려 있어 빨리 치면 어그러진다. 한 자씩 천천히.
+        for 글자 in 값:
+            page.keyboard.press(글자)
+            page.wait_for_timeout(120)
+        page.keyboard.press("Tab")
+        page.wait_for_timeout(1000)
+
+        확인 = json.loads(page.evaluate(DATE_BOXES))
+        if len(확인) < 2:
+            return False, "기간을 넣은 뒤 칸을 못 읽음"
+        들어간것 = re.sub(r"\D", "", 확인[몇번째]["글자"])[:8]
+        어디 = "시작" if 몇번째 == 0 else "끝"
+        말하기(f"    기간 {어디}: {확인[몇번째]['글자'].splitlines()[0]}")
+        if 들어간것 != 값:
+            return False, f"{어디} 날짜가 {들어간것} 로 들어갔습니다 (바란 것 {값})"
+    return True, ""
