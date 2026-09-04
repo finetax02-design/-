@@ -241,6 +241,36 @@ MENU_ITEMS = r"""(args) => {
   return JSON.stringify(결과.slice(0, 20));
 }"""
 
+# 화면을 가리는 안내 창을 찾는다. 우리가 다뤄야 할 창은 건드리지 않는다.
+NOTICE = r"""() => {
+  const 보임 = el => {
+    if (el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 200 && r.height > 80;
+  };
+  const 건드리면안될것 = /변경항목|불공제사유|일괄변경 하시겠|계정과목/;
+  for (const box of document.querySelectorAll(
+      '[class*=dialog],[class*=Dialog],[class*=modal],[class*=popup],[class*=layer]')) {
+    if (!보임(box)) continue;
+    const 글 = (box.innerText || '').trim().replace(/\s+/g, ' ');
+    if (!글) continue;
+    if (건드리면안될것.test(글)) return JSON.stringify({ 있나: false, 글: 글.slice(0, 80),
+                                                        까닭: '다뤄야 할 창' });
+    for (const b of box.querySelectorAll('button,[role=button],[class*=btn],[class*=Btn]')) {
+      if (b.offsetParent === null) continue;
+      const t = (b.innerText || b.value || '').trim().replace(/\s+/g, ' ');
+      if (!/^(확인|확인\(Enter\)|확인\(enter\)|닫기)$/.test(t)) continue;
+      const r = b.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      return JSON.stringify({ 있나: true, 글: 글.slice(0, 120), 단추: t,
+                              x: Math.round(r.x + r.width / 2),
+                              y: Math.round(r.y + r.height / 2) });
+    }
+  }
+  return JSON.stringify({ 있나: false });
+}"""
+
+
 # ---------------------------------------------------------------- 계정과목
 
 PREP = r"""(args) => {
@@ -453,6 +483,25 @@ def 누르기(page, 글, 아래것=True):
     page.mouse.click(표적["x"], 표적["y"])
     page.wait_for_timeout(800)
     return 표적
+
+
+def 안내창닫기(page, 말하기, 몇번=4):
+    """화면을 가리는 안내 창을 닫는다.
+
+    고객사에 따라 전자세금계산서 화면에 들어가거나 조회를 누를 때
+    안내 창이 뜬다. 그대로 두면 달력도 안 열리고 아무것도 못 한다.
+    우리가 다뤄야 할 창(일괄변경 확인창, 불공제사유 창)은 건드리지 않는다.
+    """
+    닫은수 = 0
+    for _ in range(몇번):
+        n = json.loads(page.evaluate(NOTICE))
+        if not n.get("있나"):
+            break
+        말하기(f"    안내창 닫음: {n['글'][:60]}")
+        page.mouse.click(n["x"], n["y"])
+        page.wait_for_timeout(900)
+        닫은수 += 1
+    return 닫은수
 
 
 def 전표읽기(page):
@@ -837,22 +886,43 @@ def 고객사열기(browser, 수임처탭, 표적, 말하기):
 
     후보 = json.loads(수임처탭.evaluate(FIND_ROW,
                                        {"이름": 표적["고객사명"], "단추": "회계"}))
-    if len(후보) != 1:
-        return None, [], f"회계 단추가 {len(후보)}개 (하나일 때만 누릅니다)"
-    수임처탭.mouse.click(후보[0]["x"], 후보[0]["y"])
+    if not 후보:
+        return None, [], "그 이름이 든 줄에 회계 단추가 없음"
 
+    # 이름이 든 줄이 여럿일 수 있다. 폐업 건이나 회계 전용 줄이 따로 있는 곳이 그렇다.
+    # 하나씩 눌러보고 cNum 이 맞는 화면이 열릴 때까지 해본다.
+    # 엉뚱한 곳이 열리면 그 탭은 닫는다.
     새탭 = None
-    for _ in range(14):
-        수임처탭.wait_for_timeout(3000)
-        것들 = [pg for ctx in browser.contexts for pg in ctx.pages]
-        맞는것 = [pg for pg in 것들
-                  if "smarta.wehago.com" in pg.url
-                  and (표적["cd_com"] in pg.url or f"cNum={표적['cno']}" in pg.url)]
-        if 맞는것:
-            새탭 = 맞는것[0]
+    if len(후보) > 1:
+        말하기(f"    이름이 든 줄이 {len(후보)}개입니다. 맞는 곳이 열릴 때까지 하나씩 해봅니다")
+    for 번째, c in enumerate(후보[:4], 1):
+        수임처탭.bring_to_front()
+        수임처탭.mouse.click(c["x"], c["y"])
+        for _ in range(8):
+            수임처탭.wait_for_timeout(2500)
+            것들 = [pg for ctx in browser.contexts for pg in ctx.pages]
+            맞는것 = [pg for pg in 것들
+                      if "smarta.wehago.com" in pg.url
+                      and (표적["cd_com"] in pg.url or f"cNum={표적['cno']}" in pg.url)]
+            if 맞는것:
+                새탭 = 맞는것[0]
+                break
+            엉뚱 = [pg for pg in 것들
+                    if "smarta.wehago.com" in pg.url and id(pg) not in 전탭]
+            if 엉뚱:
+                for pg in 엉뚱:
+                    try:
+                        pg.close()
+                    except Exception:
+                        pass
+                말하기(f"      {번째}번째 줄은 다른 고객사였습니다. 닫고 다음을 해봅니다")
+                break
+        if 새탭:
+            if len(후보) > 1:
+                말하기(f"      {번째}번째 줄이 맞았습니다")
             break
     if 새탭 is None:
-        return None, [], "고객사 화면이 안 열림"
+        return None, [], f"고객사 화면이 안 열림 (줄 {len(후보)}개를 다 해봤습니다)"
 
     새탭.bring_to_front()
     새탭.wait_for_timeout(3000)
@@ -889,6 +959,7 @@ def 고객사열기(browser, 수임처탭, 표적, 말하기):
 
     전표화면.bring_to_front()
     전표화면.wait_for_timeout(3000)
+    안내창닫기(전표화면, 말하기)
     h2 = 화면머리(전표화면)
     if not h2["이름"] or not (표적["고객사명"] in h2["이름"] or h2["이름"] in 표적["고객사명"]):
         return None, [새탭, 전표화면], f"전표 화면이 다른 고객사 (화면: {h2['이름']})"
@@ -906,6 +977,7 @@ def 매입조회(page, 말하기, 기간무엇=None):
 
     돌려주는 것: (건수, 까닭)
     """
+    안내창닫기(page, 말하기)
     if 기간무엇:
         연도 = 회계연도(page)
         if not 연도:
@@ -946,8 +1018,11 @@ def 매입조회(page, 말하기, 기간무엇=None):
     if not 단추:
         return -1, "조회 단추를 못 찾음"
     page.mouse.click(단추[0]["x"], 단추[0]["y"])
+    page.wait_for_timeout(1500)
+    안내창닫기(page, 말하기)
     for _ in range(7):
         page.wait_for_timeout(4000)
+        안내창닫기(page, 말하기, 1)
         rows = 전표읽기(page)
         if rows:
             말하기(f"    조회 {len(rows)}건")
